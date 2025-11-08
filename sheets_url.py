@@ -1,3 +1,4 @@
+# sheets_url.py
 import sys
 import json
 import subprocess
@@ -12,6 +13,20 @@ import requests
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1yIZuIjtbQNVgQaY3OvDKDcpyQm90amiMSGHpfFwTTgI/edit?gid=0#gid=0"
 WORKSHEET_NAME = "VideoMergeData"
 SERVICE_ACCOUNT_FILE = "service-key-laserrens-video.json"
+
+# Nextcloud / ownCloud WebDAV (authenticated) — used AFTER rendering
+WEBDAV_BASE = "https://cloud.targethouse.dk"
+WEBDAV_USER = "videoeditor"
+WEBDAV_PASS = "4b@XxvxaqI717wO1"
+WEBDAV_REMOTE_DIR = "Videos"  # remote subfolder (created if missing)
+
+# A real browser-like header for servers that sniff UA
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+    )
+}
 
 # Directories to search for video files
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -45,9 +60,7 @@ def download_from_url(url: str) -> Optional[str]:
         filename = os.path.basename(url.split("?")[0]) or "tempfile.mp4"
         dest = os.path.join(TEMP_DIR, filename)
         print(f"🌐 Downloading from URL: {url}")
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
-        }
+        headers = BROWSER_HEADERS.copy()
         r = requests.get(url, headers=headers, stream=True, timeout=30)
         r.raise_for_status()
         with open(dest, "wb") as f:
@@ -82,6 +95,58 @@ def resolve_path(user_value: str) -> Optional[str]:
 
 def quote_for_display(arg: str) -> str:
     return f'"{arg}"' if os.name == "nt" else shlex.quote(arg)
+
+# ── WebDAV upload helpers ───────────────────────────────────────────
+def _ensure_trailing_slash(url: str) -> str:
+    return url if url.endswith("/") else url + "/"
+
+def _webdav_root(base: str, username: str) -> str:
+    return _ensure_trailing_slash(base.rstrip("/") + f"/remote.php/dav/files/{username}")
+
+def _mkcol_path_if_needed(base_root: str, remote_path: str, auth: tuple[str, str]) -> None:
+    """
+    Ensure intermediate directories exist using MKCOL (idempotent).
+    Sends BROWSER_HEADERS so servers that sniff UA behave consistently.
+    """
+    if not remote_path:
+        return
+    parts = remote_path.strip("/").split("/")
+    if len(parts) <= 1:
+        return  # file at root
+    cur = base_root
+    for d in parts[:-1]:
+        cur = _ensure_trailing_slash(cur + d)
+        r = requests.request("MKCOL", cur, auth=auth, headers=BROWSER_HEADERS, timeout=30)
+        # 201 = created, 405 = already exists, 3xx sometimes returned by proxies
+        if r.status_code not in (201, 405, 301, 302):
+            raise RuntimeError(f"MKCOL failed for {cur} (status {r.status_code}): {r.text}")
+
+def webdav_upload_authenticated(
+    base_url: str,
+    username: str,
+    password: str,
+    local_path: str,
+    remote_path: str,
+) -> str:
+    """
+    Upload local_path to Nextcloud/ownCloud using authenticated WebDAV with a browser-like UA.
+    Returns the final WebDAV URL.
+    """
+    if not os.path.exists(local_path):
+        raise FileNotFoundError(local_path)
+    base_root = _webdav_root(base_url, username)
+    auth = (username, password)
+
+    # Ensure remote folders exist
+    _mkcol_path_if_needed(base_root, remote_path, auth=auth)
+
+    target_url = base_root + remote_path.lstrip("/")
+    with open(local_path, "rb") as f:
+        r = requests.put(target_url, data=f, auth=auth, headers=BROWSER_HEADERS, timeout=120)
+    if r.status_code not in (200, 201, 204):
+        raise RuntimeError(f"Upload failed (status {r.status_code}): {r.text}")
+    return target_url
+
 
 # ── Main workflow ────────────────────────────────────────────────
 def main() -> None:
@@ -119,7 +184,6 @@ def main() -> None:
             sys.exit(1)
 
     generate_col_index = headers.index("Generate") + 1
-
     any_executed = False
 
     for idx, row in enumerate(rows, start=2):
@@ -161,11 +225,12 @@ def main() -> None:
 
         any_executed = True
 
-        # Generate filename from video2's basename:
+        # Generate output filename from video2's basename:
         base_filename = os.path.basename(main_path)
         filename_no_ext, _ = os.path.splitext(base_filename)
         output_file = f"{filename_no_ext}_merged.mp4"
 
+        # --- RENDER (call your merge script; NO upload flags here) ---
         cmd_parts = [
             sys.executable,
             "merge_videos_cli.py",
@@ -175,37 +240,50 @@ def main() -> None:
             text1,
             text2,
             text3,
-            "-o",
-            output_file,
-            "--size",
-            "1080",
-            "--fit",
-            "crop",
-            "--bottom",
-            "60",
-            "--upload",
-            "--webdav-base",
-            "https://cloud.targethouse.dk",
-            "--webdav-user",
-            "videoeditor",
-            "--webdav-pass",
-            "4b@XxvxaqI717wO1",
-            "--remote-path",
-            f"Videos/{output_file}",
+            "-o", output_file,
+            "--size", "1080",
+            "--fit", "crop",
+            "--bottom", "60",
         ]
-
         display_cmd = " ".join(quote_for_display(a) for a in cmd_parts)
         print(f"Executing: {display_cmd}")
 
         try:
             subprocess.run(cmd_parts, check=True)
-            print(f"✅ Row {idx}: Successfully processed {os.path.basename(main_path)}")
-            # Mark the row as processed
-            ws.update_cell(idx, generate_col_index, "FALSE")
-            print(f"📝 Row {idx}: Updated 'Generate' to FALSE.")
+            print(f"✅ Row {idx}: Successfully rendered {os.path.basename(main_path)} to {output_file}")
         except subprocess.CalledProcessError as e:
             sys.stderr.write(f"[Row {idx}] ❌ merge_videos_cli.py failed for '{os.path.basename(main_path)}' "
                              f"with exit code {e.returncode}.\n")
+            continue  # don’t flip Generate if render failed
+
+        # --- UPLOAD (do it HERE, after rendering) ---
+        try:
+            remote_name = output_file  # keep same name remotely
+            if WEBDAV_REMOTE_DIR:
+                remote_path = f"{WEBDAV_REMOTE_DIR.strip('/')}/{remote_name}"
+            else:
+                remote_path = remote_name
+
+            print(f"☁️  Uploading via WebDAV to {WEBDAV_BASE} …")
+            webdav_url = webdav_upload_authenticated(
+                base_url=WEBDAV_BASE,
+                username=WEBDAV_USER,
+                password=WEBDAV_PASS,
+                local_path=output_file,
+                remote_path=remote_path,
+            )
+            print(f"✅ Upload complete: {webdav_url}")
+        except Exception as e:
+            sys.stderr.write(f"[Row {idx}] ⚠️ Upload failed for {output_file}:\n{e}\n")
+            # keep going; we still flip Generate only if you want. For safety, don’t flip on upload failure.
+            continue
+
+        # Mark the row as processed
+        try:
+            ws.update_cell(idx, generate_col_index, "FALSE")
+            print(f"📝 Row {idx}: Updated 'Generate' to FALSE.")
+        except Exception as e:
+            sys.stderr.write(f"[Row {idx}] ⚠️ Failed to update 'Generate' cell:\n{e}\n")
 
     if not any_executed:
         print("No rows processed (either no Generate=TRUE or missing files).")
