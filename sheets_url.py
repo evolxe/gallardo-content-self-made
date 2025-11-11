@@ -2,11 +2,10 @@
 import sys
 import os
 import shlex
-import subprocess
-from typing import Any, Optional, List, Tuple
 import time
 import uuid
-import urllib.parse
+import subprocess
+from typing import Any, Optional, List, Tuple
 
 import requests
 import gspread
@@ -32,10 +31,13 @@ VIDEO_SEARCH_DIRS = [
     os.path.join(SCRIPT_DIR, "videos"),
 ]
 
-# Final render defaults (1:1 output, crop to square, bottom textbox)
+# Render defaults (1:1 output, crop to square, bottom textbox)
 RENDER_SIZE = 1080
 RENDER_FIT = "crop"   # "crop" or "pad"
 TEXTBOX_BOTTOM_MARGIN = 60
+
+# Column to write the final downloadable URL into (auto-created if missing)
+DOWNLOAD_URL_COL_NAME = "Download URL"
 
 # Browser-like header for all outbound HTTP requests
 BROWSER_HEADERS = {
@@ -48,19 +50,16 @@ BROWSER_HEADERS = {
 # ── Public share upload (DEFAULT path) ────────────────────────────────────────
 # Public WebDAV endpoint: https://<host>/public.php/webdav/<FILENAME>
 PUBLIC_SHARE_BASE = "https://cloud.targethouse.dk"
-PUBLIC_SHARE_TOKEN = "8eHQ4ntJK4yS8ZW"   # << updated token from your new share URL
-PUBLIC_SHARE_PASSWORD = ""               # set if the share is password-protected
-USE_PUBLIC_SHARE_UPLOAD = True           # ✅ default to public-share upload first
+PUBLIC_SHARE_TOKEN = "8eHQ4ntJK4yS8ZW"   # your new share token
+PUBLIC_SHARE_PASSWORD = ""               # set if the share requires a password
+USE_PUBLIC_SHARE_UPLOAD = True           # default = public share first
 
 # ── Authenticated WebDAV (fallback) ───────────────────────────────────────────
 # Authenticated WebDAV endpoint: https://<host>/remote.php/dav/files/<USER>/<PATH>
 WEBDAV_BASE = "https://cloud.targethouse.dk"
-WEBDAV_USER = "videoeditor"              # your account
-WEBDAV_PASS = "4b@XxvxaqI717wO1"         # your app password (or password)
+WEBDAV_USER = "videoeditor"
+WEBDAV_PASS = "4b@XxvxaqI717wO1"
 WEBDAV_REMOTE_DIR = "Videos"             # remote subfolder; created if missing
-
-# Sheet column to write uploaded URL (auto-created if missing)
-UPLOADED_URL_COL_NAME = "Uploaded URL"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # UTILITIES
@@ -80,18 +79,17 @@ def is_url(s: str) -> bool:
 def download_from_url(url: str) -> Optional[str]:
     try:
         filename = os.path.basename(url.split("?")[0]) or "tempfile"
-        # Guess extension lightly
         if "." not in filename:
             filename += ".mp4"
         dest = os.path.join(TEMP_DIR, filename)
-        print(f"🌐 Downloading from URL: {url}")
+        print(f"Downloading from URL: {url}")
         r = requests.get(url, headers=BROWSER_HEADERS, stream=True, timeout=45)
         r.raise_for_status()
         with open(dest, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
-        print(f"✅ Downloaded to {dest}")
+        print(f"Downloaded to {dest}")
         return dest
     except Exception as e:
         sys.stderr.write(f"[URL Download Error] Could not fetch {url}:\n{e}\n")
@@ -101,17 +99,13 @@ def resolve_path(user_value: str) -> Optional[str]:
     if not user_value:
         return None
     val = user_value.strip().strip('"')
-    # If URL, try to download first
     if is_url(val):
         dl = download_from_url(val)
         return dl if dl and os.path.exists(dl) else None
-    # If absolute path
     if os.path.isabs(val) and os.path.exists(val):
         return os.path.abspath(val)
-    # If relative path
     if os.path.exists(val):
         return os.path.abspath(val)
-    # Search common locations
     for base in VIDEO_SEARCH_DIRS:
         candidate = os.path.abspath(os.path.join(base, val))
         if os.path.exists(candidate):
@@ -119,7 +113,6 @@ def resolve_path(user_value: str) -> Optional[str]:
     return None
 
 def quote_for_display(arg: str) -> str:
-    # Nice-looking echo of command; keep Windows-friendly quotes
     return f'"{arg}"' if os.name == "nt" else shlex.quote(arg)
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -145,9 +138,63 @@ def _mkcol_path_if_needed(base_root: str, remote_path: str, auth: Tuple[str, str
     for d in parts[:-1]:
         cur = _ensure_trailing_slash(cur + d)
         r = requests.request("MKCOL", cur, auth=auth, headers=BROWSER_HEADERS, timeout=30)
-        # 201 created, 405 exists, 3xx sometimes returned by proxies
         if r.status_code not in (201, 405, 301, 302):
             raise RuntimeError(f"MKCOL failed for {cur} (status {r.status_code}): {r.text}")
+
+def public_share_upload_allows_write(base_url: str, share_token: str, share_password: str = "") -> bool:
+    """
+    Confirm the public share allows uploads:
+      - PUT a zero-byte temp file
+      - If success, DELETE it
+    """
+    url_base = base_url.rstrip("/")
+    test_name = f"._nc_upload_test_{uuid.uuid4().hex}.txt"
+    put_url = f"{url_base}/public.php/webdav/{test_name}"
+    auth = (share_token, share_password)
+
+    # zero-byte body
+    r = requests.put(put_url, data=b"", auth=auth, headers=BROWSER_HEADERS, timeout=30)
+    if r.status_code in (200, 201, 204):
+        # try delete the temp file (ignore errors)
+        try:
+            del_url = put_url
+            requests.delete(del_url, auth=auth, headers=BROWSER_HEADERS, timeout=30)
+        except Exception:
+            pass
+        return True
+    return False
+
+def upload_webdav_public(
+    base_url: str,
+    share_token: str,
+    local_path: str,
+    remote_filename: str,
+    share_password: Optional[str] = None,
+) -> str:
+    """
+    Upload into a Nextcloud/ownCloud public share (ONLY if share allows uploads):
+      PUT <base>/public.php/webdav/<remote_filename>
+    Auth = (share_token, share_password or "")
+    Returns the public WebDAV URL.
+    """
+    if not os.path.exists(local_path):
+        raise FileNotFoundError(local_path)
+    url = base_url.rstrip("/") + "/public.php/webdav/" + remote_filename.lstrip("/")
+    auth = (share_token, share_password or "")
+    with open(local_path, "rb") as f:
+        r = requests.put(url, data=f, auth=auth, headers=BROWSER_HEADERS, timeout=180)
+    if r.status_code not in (200, 201, 204):
+        raise RuntimeError(f"Public upload failed (status {r.status_code}): {r.text}")
+    return url
+
+def public_share_download_url(base_url: str, share_token: str, filename: str, path: str = "/") -> str:
+    """
+    Build a direct download URL for a file uploaded into a public share folder.
+    Most Nextclouds accept: /s/<token>/download?path=<path>&files=<filename>
+    """
+    base = base_url.rstrip("/")
+    p = path if path else "/"
+    return f"{base}/s/{share_token}/download?path={p}&files={filename}"
 
 def upload_webdav_authenticated(
     base_url: str,
@@ -175,76 +222,84 @@ def upload_webdav_authenticated(
         raise RuntimeError(f"Upload failed (status {r.status_code}): {r.text}")
     return target_url
 
-def upload_webdav_public(
+def ocs_get_or_create_public_share_link(
     base_url: str,
-    share_token: str,
-    local_path: str,
-    remote_filename: str,
-    share_password: Optional[str] = None,
+    username: str,
+    password: str,
+    remote_path: str,
 ) -> str:
     """
-    Upload into a Nextcloud/ownCloud public share (ONLY if share allows uploads):
-      PUT <base>/public.php/webdav/<remote_filename>
-    Auth = (share_token, share_password or "")
-    Returns the public WebDAV URL (not the pretty /s/<token> link).
+    Use Nextcloud OCS API to fetch existing public share for `remote_path`,
+    or create a new one (read-only). Returns the share `url`.
     """
-    if not os.path.exists(local_path):
-        raise FileNotFoundError(local_path)
-    url = base_url.rstrip("/") + "/public.php/webdav/" + remote_filename.lstrip("/")
-    auth = (share_token, share_password or "")
-    with open(local_path, "rb") as f:
-        r = requests.put(url, data=f, auth=auth, headers=BROWSER_HEADERS, timeout=180)
-    if r.status_code not in (200, 201, 204):
-        raise RuntimeError(f"Public upload failed (status {r.status_code}): {r.text}")
+    base = base_url.rstrip("/")
+    auth = (username, password)
+    headers = {
+        **BROWSER_HEADERS,
+        "OCS-APIRequest": "true",
+        "Accept": "application/json",
+    }
+
+    # 1) Try to find an existing share for this path
+    # GET .../ocs/v2.php/apps/files_sharing/api/v1/shares?path=<path>&reshares=true
+    params = {"path": f"/{remote_path.lstrip('/')}", "reshares": "true", "format": "json"}
+    r = requests.get(f"{base}/ocs/v2.php/apps/files_sharing/api/v1/shares", params=params,
+                     auth=auth, headers=headers, timeout=30)
+    try:
+        data = r.json()
+        shares = data.get("ocs", {}).get("data", [])
+        if isinstance(shares, dict):
+            shares = [shares] if shares else []
+        for s in shares:
+            url = s.get("url")
+            if url:
+                return url
+    except Exception:
+        # ignore parse errors and continue to create
+        pass
+
+    # 2) Create a new public share
+    # POST .../ocs/v2.php/apps/files_sharing/api/v1/shares
+    #   path=<path>, shareType=3(public), permissions=1(read)
+    payload = {
+        "path": f"/{remote_path.lstrip('/')}",
+        "shareType": "3",
+        "permissions": "1",
+        "format": "json",
+    }
+    r = requests.post(f"{base}/ocs/v2.php/apps/files_sharing/api/v1/shares",
+                      data=payload, auth=auth, headers=headers, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    url = data.get("ocs", {}).get("data", {}).get("url")
+    if not url:
+        raise RuntimeError(f"OCS share create returned no URL: {data}")
     return url
 
-def check_public_share_uploadable(
-    base_url: str, share_token: str, share_password: Optional[str] = None
-) -> bool:
-    """
-    Quick preflight to confirm if the public share ALLOWS uploads:
-    Attempts a short PUT of a tiny test blob to public WebDAV, then tries to DELETE it.
-    Returns True if PUT succeeded (2xx), regardless of DELETE outcome.
-    """
-    test_name = f"upload-preflight-{uuid.uuid4().hex[:8]}.txt"
-    url = base_url.rstrip("/") + "/public.php/webdav/" + test_name
-    auth = (share_token, share_password or "")
-    try:
-        r_put = requests.put(url, data=b"ok", auth=auth, headers=BROWSER_HEADERS, timeout=30)
-        if r_put.status_code not in (200, 201, 204):
-            return False
-        # attempt to delete (may fail depending on permissions; that's fine)
-        try:
-            requests.delete(url, auth=auth, headers=BROWSER_HEADERS, timeout=15)
-        except Exception:
-            pass
-        return True
-    except Exception:
-        return False
+# ──────────────────────────────────────────────────────────────────────────────
+# SHEET HELPERS
+# ──────────────────────────────────────────────────────────────────────────────
 
-def build_public_share_download_url(share_base: str, share_token: str, filename: str) -> str:
+def ensure_download_url_col(ws) -> int:
     """
-    Build a human-friendly download URL for the uploaded file in a public share.
-    Typical pattern: /s/<token>/download?path=/&files=<filename>
+    Ensure there is a 'Download URL' column in the sheet header row.
+    Returns the 1-based column index for writing.
     """
-    q = urllib.parse.urlencode({"path": "/", "files": filename})
-    return f"{share_base.rstrip('/')}/s/{share_token}/download?{q}"
+    headers = ws.row_values(1)
+    if DOWNLOAD_URL_COL_NAME in headers:
+        return headers.index(DOWNLOAD_URL_COL_NAME) + 1
+    # append at the end
+    col_index = len(headers) + 1
+    try:
+        ws.update_cell(1, col_index, DOWNLOAD_URL_COL_NAME)
+        print(f"Added header '{DOWNLOAD_URL_COL_NAME}' at column {col_index}.")
+    except Exception as e:
+        sys.stderr.write(f"[Header Warning] Could not add '{DOWNLOAD_URL_COL_NAME}' header: {e}\n")
+    return col_index
 
 # ──────────────────────────────────────────────────────────────────────────────
 # MAIN WORKFLOW
 # ──────────────────────────────────────────────────────────────────────────────
-
-def ensure_uploaded_url_column(ws) -> int:
-    """
-    Ensure the 'Uploaded URL' column exists. Return its 1-based column index.
-    """
-    headers = ws.row_values(1)
-    if UPLOADED_URL_COL_NAME in headers:
-        return headers.index(UPLOADED_URL_COL_NAME) + 1
-    # Create new column at the end
-    col_idx = len(headers) + 1
-    ws.update_cell(1, col_idx, UPLOADED_URL_COL_NAME)
-    return col_idx
 
 def main() -> None:
     # Google auth
@@ -286,21 +341,16 @@ def main() -> None:
             sys.exit(1)
 
     generate_col_index = headers.index("Generate") + 1
-    uploaded_url_col_index = ensure_uploaded_url_column(ws)
-
-    # Preflight: confirm if public share allows uploads (informational)
-    public_upload_ok = False
-    if USE_PUBLIC_SHARE_UPLOAD:
-        print("🔎 Preflighting public share for upload permission…")
-        public_upload_ok = check_public_share_uploadable(
-            PUBLIC_SHARE_BASE, PUBLIC_SHARE_TOKEN, PUBLIC_SHARE_PASSWORD or None
-        )
-        if public_upload_ok:
-            print("✅ Public share appears to ALLOW uploads.")
-        else:
-            print("⚠️  Public share appears to REJECT uploads; will use authenticated fallback.")
-
+    download_col_index = ensure_download_url_col(ws)
     any_executed = False
+
+    # Confirm public share allows uploads (once)
+    if USE_PUBLIC_SHARE_UPLOAD:
+        can_upload = public_share_upload_allows_write(PUBLIC_SHARE_BASE, PUBLIC_SHARE_TOKEN, PUBLIC_SHARE_PASSWORD)
+        if can_upload:
+            print(f"Public share appears to allow uploads: {PUBLIC_SHARE_BASE.rstrip('/')}/s/{PUBLIC_SHARE_TOKEN}")
+        else:
+            sys.stderr.write("Warning: Public share may not allow uploads (PUT test failed). Will still try and then fall back.\n")
 
     for idx, row in enumerate(rows, start=2):
         if not truthy_generate(row.get("Generate")):
@@ -340,7 +390,7 @@ def main() -> None:
         filename_no_ext, _ = os.path.splitext(base_filename)
         output_file = f"{filename_no_ext}_merged.mp4"
 
-        # ── Render via your merge script (no upload flags here) ────────────────
+        # ── Render via your merge script (no upload here) ─────────────────────
         cmd_parts = [
             sys.executable,
             "merge_videos_cli.py",
@@ -354,24 +404,24 @@ def main() -> None:
             "--bottom", str(TEXTBOX_BOTTOM_MARGIN),
         ]
         display_cmd = " ".join(quote_for_display(a) for a in cmd_parts)
-        print(f"▶️  Executing: {display_cmd}")
+        print(f"Executing: {display_cmd}")
 
         try:
             subprocess.run(cmd_parts, check=True)
-            print(f"✅ Row {idx}: Rendered → {output_file}")
+            print(f"Row {idx}: Rendered -> {output_file}")
         except subprocess.CalledProcessError as e:
-            sys.stderr.write(f"[Row {idx}] ❌ merge_videos_cli.py failed for '{os.path.basename(main_path)}' "
+            sys.stderr.write(f"[Row {idx}] ERROR: merge_videos_cli.py failed for '{os.path.basename(main_path)}' "
                              f"(exit {e.returncode}).\n")
             continue  # do not flip Generate on render failure
 
         # ── Upload AFTER rendering: try PUBLIC first (default), then AUTH fallback ─
-        uploaded_human_url = ""  # what we write back to the sheet
+        final_download_url: Optional[str] = None
 
-        try:
-            remote_name = output_file  # filename as stored remotely
-
-            if USE_PUBLIC_SHARE_UPLOAD and public_upload_ok:
-                print(f"☁️  Uploading to PUBLIC share (WebDAV)…")
+        # 1) Public share upload
+        if USE_PUBLIC_SHARE_UPLOAD:
+            try:
+                remote_name = output_file
+                print("Uploading to PUBLIC share (WebDAV)...")
                 public_webdav_url = upload_webdav_public(
                     base_url=PUBLIC_SHARE_BASE,
                     share_token=PUBLIC_SHARE_TOKEN,
@@ -379,49 +429,62 @@ def main() -> None:
                     remote_filename=remote_name,
                     share_password=PUBLIC_SHARE_PASSWORD or None,
                 )
-                print(f"✅ Public upload complete: {public_webdav_url}")
-                # Build a human-friendly share download link:
-                uploaded_human_url = build_public_share_download_url(
-                    PUBLIC_SHARE_BASE, PUBLIC_SHARE_TOKEN, remote_name
+                print(f"Public upload complete: {public_webdav_url}")
+                # Build a direct download URL for the uploaded file
+                final_download_url = public_share_download_url(
+                    base_url=PUBLIC_SHARE_BASE,
+                    share_token=PUBLIC_SHARE_TOKEN,
+                    filename=remote_name,
+                    path="/"
                 )
-                print(f"🔗 Public download URL: {uploaded_human_url}")
-            else:
-                raise RuntimeError("Public upload disabled or preflight failed; using authenticated fallback.")
+                print(f"Public direct download URL: {final_download_url}")
+            except Exception as e_pub:
+                sys.stderr.write(f"[Row {idx}] Warning: Public upload failed: {e_pub}\n")
 
-        except Exception as e_pub:
-            sys.stderr.write(f"[Row {idx}] ⚠️ Public upload failed: {e_pub}\n")
-            # Authenticated fallback
+        # 2) If public failed or disabled, authenticated fallback + create share via OCS
+        if not final_download_url:
             try:
+                remote_name = output_file
                 remote_path = remote_name
                 if WEBDAV_REMOTE_DIR:
                     remote_path = f"{WEBDAV_REMOTE_DIR.strip('/')}/{remote_name}"
-                print(f"☁️  Uploading via AUTHENTICATED WebDAV fallback…")
-                auth_url = upload_webdav_authenticated(
+
+                print("Uploading via AUTHENTICATED WebDAV fallback...")
+                auth_webdav_url = upload_webdav_authenticated(
                     base_url=WEBDAV_BASE,
                     username=WEBDAV_USER,
                     password=WEBDAV_PASS,
                     local_path=output_file,
                     remote_path=remote_path,
                 )
-                print(f"✅ Authenticated upload complete: {auth_url}")
-                uploaded_human_url = auth_url  # write the direct WebDAV URL if we used fallback
-                print("    (For a public share link, create a share in the Nextcloud UI.)")
+                print(f"Authenticated upload complete: {auth_webdav_url}")
+
+                # Create or fetch a public share link for this file (OCS API)
+                print("Creating or fetching public share link (OCS API)...")
+                share_url = ocs_get_or_create_public_share_link(
+                    base_url=WEBDAV_BASE,
+                    username=WEBDAV_USER,
+                    password=WEBDAV_PASS,
+                    remote_path=remote_path,
+                )
+                final_download_url = f"{share_url.rstrip('/')}/download"
+                print(f"OCS direct download URL: {final_download_url}")
             except Exception as e_auth:
-                sys.stderr.write(f"[Row {idx}] ❌ Authenticated upload also failed:\n{e_auth}\n")
+                sys.stderr.write(f"[Row {idx}] ERROR: Authenticated upload + OCS share failed:\n{e_auth}\n")
                 # Do NOT flip Generate if both uploads failed
                 continue
 
-        # ── Flip Generate to FALSE (processed) & write Uploaded URL ────────────
+        # ── Flip Generate to FALSE and write download URL ─────────────────────
         try:
             ws.update_cell(idx, generate_col_index, "FALSE")
-            if uploaded_human_url:
-                ws.update_cell(idx, uploaded_url_col_index, uploaded_human_url)
-            print(f"📝 Row {idx}: Updated 'Generate' → FALSE and wrote Uploaded URL.")
+            if final_download_url:
+                ws.update_cell(idx, download_col_index, final_download_url)
+            print(f"Row {idx}: Updated 'Generate' -> FALSE; wrote 'Download URL'.")
         except Exception as e:
-            sys.stderr.write(f"[Row {idx}] ⚠️ Failed to update sheet cells:\n{e}\n")
+            sys.stderr.write(f"[Row {idx}] Warning: Failed to update sheet cells:\n{e}\n")
 
     if not any_executed:
-        print("No rows processed (either Generate!=TRUE or files missing).")
+        print("No rows processed (either Generate != TRUE or files missing).")
 
 # ──────────────────────────────────────────────────────────────────────────────
 
