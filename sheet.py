@@ -64,7 +64,55 @@ def is_url(s: str) -> bool:
     return isinstance(s, str) and (s.startswith("http://") or s.startswith("https://"))
 
 
+def download_nextcloud_public_file(url: str) -> Optional[str]:
+    """
+    Handles Nextcloud public-share links that require a strict cookie.
+    1. GET the base share page to obtain cookies
+    2. Reuse session cookies to request /download
+    """
+    try:
+        # Build session with browser-like headers
+        session = requests.Session()
+        session.headers.update(BROWSER_HEADERS)
+
+        # Step 1 — visit base share page (no /download)
+        base_url = url.replace("/download", "")
+        print(f"[NC] Visiting share page to obtain cookies: {base_url}")
+        r1 = session.get(base_url, timeout=30)
+        r1.raise_for_status()
+
+        # Step 2 — request the actual file
+        print(f"[NC] Downloading with session cookies: {url}")
+        r2 = session.get(url, stream=True, timeout=120)
+        r2.raise_for_status()
+
+        # Determine filename
+        filename = os.path.basename(url.split("?", 1)[0]) or "tempfile"
+        if "." not in filename:
+            filename += ".mp4"
+
+        dest = os.path.join(TEMP_DIR, filename)
+
+        with open(dest, "wb") as f:
+            for chunk in r2.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+        print(f"[NC] Download complete: {dest}")
+        return dest
+
+    except Exception as e:
+        sys.stderr.write(f"[Nextcloud Cookie Download Error] {e}\n")
+        return None
+
+
 def download_from_url(url: str) -> Optional[str]:
+    # Detect Nextcloud public share link and use cookie-based method
+    if "cloud.targethouse.dk" in url and "/s/" in url:
+        print("[NC] Detected Nextcloud public-share URL → using cookie method")
+        return download_nextcloud_public_file(url)
+
+    # Normal HTTP download
     try:
         filename = os.path.basename(url.split("?", 1)[0]) or "tempfile"
         if "." not in filename:
