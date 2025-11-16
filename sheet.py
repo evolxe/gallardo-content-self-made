@@ -3,6 +3,7 @@ import sys
 import os
 import shlex
 import subprocess
+import time
 from typing import Any, Optional, List
 
 import requests
@@ -492,6 +493,50 @@ def main() -> None:
             download_url = share_url.rstrip("/") + "/download"
             print(f"[Row {idx}] Share link: {share_url}")
             print(f"[Row {idx}] Download URL: {download_url}")
+
+            # Verify the download URL is accessible with retry logic
+            # (Nextcloud may need a moment to make the share available)
+            max_retries = 3
+            url_accessible = False
+            for attempt in range(max_retries):
+                try:
+                    resp = requests.head(
+                        download_url,
+                        headers=BROWSER_HEADERS,
+                        timeout=10,
+                        allow_redirects=True,
+                    )
+                    if resp.status_code == 200:
+                        url_accessible = True
+                        print(
+                            f"[Row {idx}] ✓ Download URL verified as accessible (attempt {attempt + 1})"
+                        )
+                        break
+                    elif attempt < max_retries - 1:
+                        wait_time = 2 * (attempt + 1)  # Exponential backoff: 2s, 4s, 6s
+                        print(
+                            f"[Row {idx}] ⚠ Download URL returned status {resp.status_code}, "
+                            f"retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})..."
+                        )
+                        time.sleep(wait_time)
+                except requests.exceptions.RequestException as e:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 * (attempt + 1)
+                        print(
+                            f"[Row {idx}] ⚠ Error verifying download URL: {e}, "
+                            f"retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})..."
+                        )
+                        time.sleep(wait_time)
+                    else:
+                        print(
+                            f"[Row {idx}] ⚠ WARNING: Could not verify download URL after {max_retries} attempts: {e}"
+                        )
+
+            if not url_accessible:
+                print(
+                    f"[Row {idx}] ⚠ WARNING: Download URL may not be immediately accessible. "
+                    f"Nextcloud may need time to process the share. URL: {download_url}"
+                )
 
             if download_col_index is not None:
                 print(

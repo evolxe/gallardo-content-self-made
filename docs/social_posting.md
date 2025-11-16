@@ -1,4 +1,6 @@
-Quick Start
+https://getlate.dev/docs#quick-start
+
+### Quick Start
 Here's how to set up profiles and schedule your first post:
 
 1. Create a Profile
