@@ -1,0 +1,7 @@
+numpy
+moviepy
+Pillow
+requests
+gspread
+google-auth
+

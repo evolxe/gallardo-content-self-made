@@ -46,3 +46,5 @@ Temporary Items
 
 # Merge Video temp files, video from download of nextCloud
 temp_videos
+
+service-key-laserrens-video.json

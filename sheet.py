@@ -51,11 +51,13 @@ NC_REMOTE_DIR = "Videos"  # remote folder for uploads, e.g. "Videos"
 # UTILITIES
 # ─────────────────────────────────────────────────────────
 
+
 def truthy_generate(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     if value is None:
         return False
+
     s = str(value).strip().lower()
     return s in {"true", "yes", "y", "1", "on"}
 
@@ -162,12 +164,15 @@ def quote_for_display(arg: str) -> str:
 # Nextcloud WebDAV + OCS helpers
 # ─────────────────────────────────────────────────────────
 
+
 def _ensure_trailing_slash(url: str) -> str:
     return url if url.endswith("/") else url + "/"
 
 
 def _webdav_root(base: str, username: str) -> str:
-    return _ensure_trailing_slash(base.rstrip("/") + f"/remote.php/dav/files/{username}")
+    return _ensure_trailing_slash(
+        base.rstrip("/") + f"/remote.php/dav/files/{username}"
+    )
 
 
 def _mkcol_path_if_needed(base_root: str, remote_path: str, auth: tuple) -> None:
@@ -183,9 +188,13 @@ def _mkcol_path_if_needed(base_root: str, remote_path: str, auth: tuple) -> None
     cur = base_root
     for d in parts[:-1]:
         cur = _ensure_trailing_slash(cur + d)
-        r = requests.request("MKCOL", cur, auth=auth, headers=BROWSER_HEADERS, timeout=30)
+        r = requests.request(
+            "MKCOL", cur, auth=auth, headers=BROWSER_HEADERS, timeout=30
+        )
         if r.status_code not in (201, 405, 301, 302):
-            raise RuntimeError(f"MKCOL failed for {cur} (status {r.status_code}): {r.text}")
+            raise RuntimeError(
+                f"MKCOL failed for {cur} (status {r.status_code}): {r.text}"
+            )
 
 
 def upload_webdav_authenticated(
@@ -210,7 +219,9 @@ def upload_webdav_authenticated(
 
     target_url = base_root + remote_path.lstrip("/")
     with open(local_path, "rb") as f:
-        r = requests.put(target_url, data=f, auth=auth, headers=BROWSER_HEADERS, timeout=180)
+        r = requests.put(
+            target_url, data=f, auth=auth, headers=BROWSER_HEADERS, timeout=180
+        )
     if r.status_code not in (200, 201, 204):
         raise RuntimeError(f"Upload failed (status {r.status_code}): {r.text}")
     return target_url
@@ -242,15 +253,26 @@ def create_nextcloud_share_link(
 
     params = {"format": "json"}
 
-    resp = requests.post(url, auth=(username, password), headers=headers, data=data, params=params, timeout=30)
+    resp = requests.post(
+        url,
+        auth=(username, password),
+        headers=headers,
+        data=data,
+        params=params,
+        timeout=30,
+    )
     if resp.status_code not in (200, 201):
-        raise RuntimeError(f"OCS share API failed (status {resp.status_code}): {resp.text}")
+        raise RuntimeError(
+            f"OCS share API failed (status {resp.status_code}): {resp.text}"
+        )
 
     payload = resp.json()
     ocs = payload.get("ocs", {})
     meta = ocs.get("meta", {})
     if meta.get("status") != "ok":
-        raise RuntimeError(f"OCS share API error: {meta.get('message', 'unknown error')}")
+        raise RuntimeError(
+            f"OCS share API error: {meta.get('message', 'unknown error')}"
+        )
 
     data_block = ocs.get("data")
     # Some NC versions return a single dict, some a list
@@ -266,10 +288,13 @@ def create_nextcloud_share_link(
 # MAIN WORKFLOW
 # ─────────────────────────────────────────────────────────
 
+
 def main() -> None:
     # Google auth
     try:
-        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        creds = Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_FILE, scopes=SCOPES
+        )
         client = gspread.authorize(creds)
     except Exception as e:
         sys.stderr.write(f"[Auth Error] Could not authorize service account:\n{e}\n")
@@ -278,9 +303,21 @@ def main() -> None:
     # Open sheet
     try:
         sheet = client.open_by_url(SHEET_URL)
+        print(f"[Info] Opened sheet: {sheet.title}")
         ws = sheet.worksheet(WORKSHEET_NAME)
+        print(f"[Info] Opened worksheet: {ws.title}")
+
+        # Test write permissions by trying to read a cell (this verifies access)
+        try:
+            test_cell = ws.cell(1, 1).value
+            print(f"[Info] ✓ Read access confirmed (header cell value: '{test_cell}')")
+        except Exception as e:
+            print(f"[Warning] Could not read test cell: {e}")
+
     except Exception as e:
-        sys.stderr.write(f"[Open Error] Could not open Google Sheet or worksheet '{WORKSHEET_NAME}':\n{e}\n")
+        error_msg = f"[Open Error] Could not open Google Sheet or worksheet '{WORKSHEET_NAME}':\n{e}\n"
+        sys.stderr.write(error_msg)
+        print(error_msg)
         sys.exit(1)
 
     # Read data
@@ -317,8 +354,14 @@ def main() -> None:
     download_col_index = None
     if "Download URL" in headers:
         download_col_index = headers.index("Download URL") + 1
+        print(f"[Info] Found 'Download URL' column at index {download_col_index}")
+    else:
+        print(
+            f"[Info] 'Download URL' column not found in headers. Available columns: {headers}"
+        )
 
     generate_col_index = headers.index("Generate") + 1
+    print(f"[Info] 'Generate' column found at index {generate_col_index}")
 
     any_executed = False
 
@@ -342,7 +385,9 @@ def main() -> None:
         overlay_loc_1 = str(row.get("Overlay 1 Location", "")).strip() or "top-right"
 
         if not video2_val or not intro_val or not exit_val:
-            sys.stderr.write(f"[Row {idx}] Skipping: missing one or more required file fields.\n")
+            sys.stderr.write(
+                f"[Row {idx}] Skipping: missing one or more required file fields.\n"
+            )
             continue
 
         intro_path = resolve_path(intro_val)
@@ -449,24 +494,47 @@ def main() -> None:
             print(f"[Row {idx}] Download URL: {download_url}")
 
             if download_col_index is not None:
+                print(
+                    f"[Row {idx}] Writing Download URL to column {download_col_index}..."
+                )
                 ws.update_cell(idx, download_col_index, download_url)
+                # Verify the write
+                verify_value = ws.cell(idx, download_col_index).value
+                if verify_value == download_url:
+                    print(f"[Row {idx}] ✓ Download URL successfully written to sheet.")
+                else:
+                    print(
+                        f"[Row {idx}] ⚠ WARNING: Download URL write may have failed. Expected: {download_url}, Got: {verify_value}"
+                    )
             else:
                 print(
                     f"[Row {idx}] Note: 'Download URL' column not found; "
                     f"share link not written back to sheet."
                 )
         except Exception as e:
-            sys.stderr.write(
-                f"[Row {idx}] Failed to create/write share link for {remote_path}:\n{e}\n"
-            )
+            error_msg = f"[Row {idx}] Failed to create/write share link for {remote_path}:\n{e}\n"
+            sys.stderr.write(error_msg)
+            print(error_msg)  # Also print to stdout so it's visible
             # still continue and flip Generate
 
         # ---------- Flip Generate to FALSE ----------
         try:
+            print(
+                f"[Row {idx}] Setting 'Generate' to FALSE in column {generate_col_index}..."
+            )
             ws.update_cell(idx, generate_col_index, "FALSE")
-            print(f"[Row {idx}] Updated 'Generate' to FALSE.")
+            # Verify the write
+            verify_value = ws.cell(idx, generate_col_index).value
+            if str(verify_value).upper() in ("FALSE", "0", ""):
+                print(f"[Row {idx}] ✓ 'Generate' successfully set to FALSE in sheet.")
+            else:
+                print(
+                    f"[Row {idx}] ⚠ WARNING: Generate write may have failed. Expected: FALSE, Got: {verify_value}"
+                )
         except Exception as e:
-            sys.stderr.write(f"[Row {idx}] Failed to update 'Generate' cell:\n{e}\n")
+            error_msg = f"[Row {idx}] Failed to update 'Generate' cell:\n{e}\n"
+            sys.stderr.write(error_msg)
+            print(error_msg)  # Also print to stdout so it's visible
 
     if not any_executed:
         print("No rows processed (Generate not set or files missing).")
@@ -474,5 +542,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

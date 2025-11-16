@@ -1,0 +1,15 @@
+[2025-11-16 12:06:52] Starting runPython.sh
+[2025-11-16 12:06:52] Creating virtual environment at /Users/millionairemacmillionairemac/Developer/gallardo-automated-content-pipeline/venv
+[2025-11-16 12:06:56] Activating virtual environment
+[2025-11-16 12:06:56] Upgrading pip
+[2025-11-16 12:06:59] Installing dependencies from requirements.txt
+[2025-11-16 12:07:07] Running sheet.py
+[2025-11-16 12:16:14] sheet.py completed successfully
+[2025-11-16 12:16:14] Finished runPython.sh
+[2025-11-16 12:50:25] Starting runPython.sh
+[2025-11-16 12:50:25] Activating virtual environment
+[2025-11-16 12:50:25] Upgrading pip
+[2025-11-16 12:50:26] Installing dependencies from requirements.txt
+[2025-11-16 12:50:26] Running sheet.py
+[2025-11-16 12:50:30] sheet.py completed successfully
+[2025-11-16 12:50:30] Finished runPython.sh

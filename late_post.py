@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Post a video stored in a Nextcloud public share to X (Twitter) using Ayrshare.
+Post a video stored in a Nextcloud public share to ALL linked accounts on a Late Profile.
 
 Usage:
-    python post_nextcloud_to_x.py "https://cloud.example.com/s/SHAREID" \
+    python post_nextcloud_to_all.py --share_url "https://cloud.example.com/s/SHAREID" \
         --text "My video from Nextcloud"
 """
 
@@ -13,13 +13,14 @@ from urllib.parse import urlparse, urlunparse
 import requests
 
 # ------------------------------------------------------------
-# Your Ayrshare API key (as requested)
+# Late API Credentials
 # ------------------------------------------------------------
-AYRSHARE_API_KEY = "ACF65497-0CFE4C08-836553A5-6DDDB4D5"
 LATE_API_KEY = "sk_bd6dd48a14e418efb906c22047681e231bb3a7b1af27b1a4abb49880ccd65c54"
-AYRSHARE_PROFILE_KEY = None  # set if you use Ayrshare User Profiles
 
-AYRSHARE_POST_ENDPOINT = "https://api.ayrshare.com/api/post"
+# IMPORTANT: Set your Late Profile ID here:
+LATE_PROFILE_ID = "6919808587fd7ed7d58952fc"
+
+LATE_POST_ENDPOINT = "https://getlate.dev/api/v1/posts"
 
 
 def build_nextcloud_download_url(share_url: str) -> str:
@@ -42,42 +43,42 @@ def build_nextcloud_download_url(share_url: str) -> str:
     return new_url
 
 
-def post_video_to_x(
-    nextcloud_share_url: str, post_text: str, platform: str = "twitter"
-) -> dict:
+def post_video_to_all_accounts(nextcloud_share_url: str, post_text: str) -> dict:
     """
-    Publish the Nextcloud video to X via Ayrshare.
+    Publish the Nextcloud video to ALL connected accounts on a Late profile.
     """
+
+    if LATE_PROFILE_ID == "REPLACE_WITH_LATE_PROFILE_ID":
+        raise RuntimeError(
+            "❌ You must set LATE_PROFILE_ID to your real Late Profile ID."
+        )
 
     media_url = build_nextcloud_download_url(nextcloud_share_url)
 
     headers = {
-        "Authorization": f"Bearer {AYRSHARE_API_KEY}",
+        "Authorization": f"Bearer {LATE_API_KEY}",
         "Content-Type": "application/json",
     }
 
-    if AYRSHARE_PROFILE_KEY:
-        headers["Profile-Key"] = AYRSHARE_PROFILE_KEY
-
     payload = {
-        "post": post_text,
-        "platforms": [platform],
-        "mediaUrls": [media_url],
-        "isVideo": True,
+        "content": post_text,
+        "profileId": LATE_PROFILE_ID,  # <-- The important change
+        "mediaItems": [{"type": "video", "source": "url", "url": media_url}],
+        "publishNow": True,
     }
 
-    response = requests.post(AYRSHARE_POST_ENDPOINT, headers=headers, json=payload)
+    response = requests.post(LATE_POST_ENDPOINT, headers=headers, json=payload)
 
     try:
         data = response.json()
     except Exception:
         raise RuntimeError(
-            f"Ayrshare returned non-JSON response: HTTP {response.status_code} — {response.text}"
+            f"Late returned non-JSON response: HTTP {response.status_code}. {response.text}"
         )
 
-    if response.status_code >= 400 or data.get("status") == "error":
+    if response.status_code >= 400:
         raise RuntimeError(
-            f"Ayrshare API error (HTTP {response.status_code}): {json.dumps(data, indent=2)}"
+            f"Late API error (HTTP {response.status_code}): {json.dumps(data, indent=2)}"
         )
 
     return data
@@ -85,16 +86,13 @@ def post_video_to_x(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Post a Nextcloud-hosted video to X (Twitter) via Ayrshare."
+        description="Post a Nextcloud-hosted video to ALL accounts via Late."
     )
     parser.add_argument(
         "--share_url",
         help="Public Nextcloud share URL (e.g., https://cloud.example.com/s/ID)",
     )
     parser.add_argument("--text", "-t", default="", help="Text to include in the post.")
-    parser.add_argument(
-        "--platform", default="twitter", help="Ayrshare platform (default: twitter)."
-    )
 
     args = parser.parse_args()
 
@@ -102,16 +100,15 @@ def main() -> None:
     print(f"Derived download URL: {build_nextcloud_download_url(args.share_url)}")
 
     try:
-        result = post_video_to_x(
+        result = post_video_to_all_accounts(
             nextcloud_share_url=args.share_url,
             post_text=args.text,
-            platform=args.platform,
         )
-        print("\n✅ Successfully posted to Ayrshare!")
+        print("\n✅ Successfully posted via Late to ALL accounts!")
         print(json.dumps(result, indent=2))
 
     except Exception as e:
-        print(f"\n❌ ERROR posting to Ayrshare:\n{e}")
+        print(f"\n❌ ERROR posting to Late:\n{e}")
 
 
 if __name__ == "__main__":
