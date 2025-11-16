@@ -10,6 +10,8 @@ import requests
 import gspread
 from google.oauth2.service_account import Credentials
 
+from validation import validate_nextcloud_url, normalize_nextcloud_url, is_nextcloud_url
+
 # ─────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────
@@ -20,10 +22,40 @@ SERVICE_ACCOUNT_FILE = "service-key-laserrens-video.json"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-TEMP_DIR = os.path.join(SCRIPT_DIR, "temp_videos")
-os.makedirs(TEMP_DIR, exist_ok=True)
+
+
+def get_temp_dir() -> str:
+    """
+    Determine the appropriate temp directory based on environment.
+    - On SSH/server: Use /tmp for better performance and automatic cleanup
+    - On local development: Use temp_videos/ folder relative to script
+    """
+    # Check if we're on a server/SSH environment
+    # Indicators: SSH_CONNECTION env var, or running in /home/ or /var/ directories
+    is_server = (
+        os.environ.get("SSH_CONNECTION") is not None
+        or os.environ.get("SSH_CLIENT") is not None
+        or os.environ.get("SSH_TTY") is not None
+        or os.getcwd().startswith(("/home/", "/var/", "/opt/"))
+    )
+
+    if is_server:
+        # On server: use /tmp with a subdirectory for our files
+        temp_base = "/tmp/gallardo-video-pipeline"
+        os.makedirs(temp_base, exist_ok=True)
+        return temp_base
+    else:
+        # Local development: use temp_videos/ folder
+        temp_dir = os.path.join(SCRIPT_DIR, "temp_videos")
+        os.makedirs(temp_dir, exist_ok=True)
+        return temp_dir
+
+
+TEMP_DIR = get_temp_dir()
+print(f"[Config] Using temp directory: {TEMP_DIR}")
 
 VIDEO_SEARCH_DIRS = [
+    TEMP_DIR,  # First check temp directory (where downloads go)
     os.getcwd(),
     SCRIPT_DIR,
     os.path.join(SCRIPT_DIR, "videos"),
@@ -110,6 +142,13 @@ def download_nextcloud_public_file(url: str) -> Optional[str]:
 
 
 def download_from_url(url: str) -> Optional[str]:
+    # Normalize Nextcloud URLs to standard format
+    if is_nextcloud_url(url):
+        normalized_url = normalize_nextcloud_url(url)
+        if normalized_url != url:
+            print(f"[NC] Normalized Nextcloud URL: {url} → {normalized_url}")
+        url = normalized_url
+
     # Detect Nextcloud public share link and use cookie-based method
     if "cloud.targethouse.dk" in url and "/s/" in url:
         print("[NC] Detected Nextcloud public-share URL → using cookie method")
@@ -374,6 +413,24 @@ def main() -> None:
         intro_val = str(row.get("Intro Video File Name/URL", "")).strip()
         exit_val = str(row.get("Exit Video File Name/URL", "")).strip()
 
+        # Validate Nextcloud URLs and provide helpful error messages
+        url_fields = [
+            ("Video File Name", video2_val),
+            ("Intro Video File Name/URL", intro_val),
+            ("Exit Video File Name/URL", exit_val),
+        ]
+
+        for field_name, field_value in url_fields:
+            if field_value and field_value.startswith(("http://", "https://")):
+                is_valid, error_msg = validate_nextcloud_url(field_value)
+                if not is_valid:
+                    sys.stderr.write(
+                        f"[Row {idx}] Validation error in '{field_name}': {error_msg}\n"
+                        f"  Value: {field_value}\n"
+                        f"  See docs/user_instructions.md for correct URL format.\n"
+                    )
+                    # Continue processing but log the error - let resolve_path handle the actual failure
+
         text1 = str(row.get("Video Text 1", "")).strip()
         text2 = str(row.get("Video Text 2", "")).strip()
         text3 = str(row.get("Video Text 3", "")).strip()
@@ -395,6 +452,14 @@ def main() -> None:
         main_path = resolve_path(video2_val)
         exit_path = resolve_path(exit_val)
 
+        # Ensure all paths are absolute for subprocess call
+        if intro_path:
+            intro_path = os.path.abspath(intro_path)
+        if main_path:
+            main_path = os.path.abspath(main_path)
+        if exit_path:
+            exit_path = os.path.abspath(exit_path)
+
         missing: List[str] = []
         if not intro_path:
             missing.append(f"Intro '{intro_val}'")
@@ -413,6 +478,15 @@ def main() -> None:
         # Overlay element may be URL or path
         overlay_elem_path = ""
         if overlay_elem_1:
+            # Validate overlay URL if it's a Nextcloud URL
+            if overlay_elem_1.startswith(("http://", "https://")):
+                is_valid, error_msg = validate_nextcloud_url(overlay_elem_1)
+                if not is_valid:
+                    sys.stderr.write(
+                        f"[Row {idx}] Validation warning for 'Overlay Element 1': {error_msg}\n"
+                        f"  Value: {overlay_elem_1}\n"
+                    )
+
             overlay_elem_path = resolve_path(overlay_elem_1) or ""
             if not overlay_elem_path:
                 sys.stderr.write(
@@ -423,12 +497,18 @@ def main() -> None:
 
         base_filename = os.path.basename(main_path)
         filename_no_ext, _ = os.path.splitext(base_filename)
-        output_file = f"{filename_no_ext}_merged.mp4"
+        # Ensure output_file is an absolute path in TEMP_DIR
+        output_file = os.path.abspath(
+            os.path.join(TEMP_DIR, f"{filename_no_ext}_merged.mp4")
+        )
+
+        # Ensure merge.py path is absolute
+        merge_script = os.path.abspath(os.path.join(SCRIPT_DIR, "merge.py"))
 
         # ---------- Render via merge.py ----------
         cmd_parts = [
             sys.executable,
-            "merge.py",
+            merge_script,
             intro_path,
             main_path,
             exit_path,
@@ -449,10 +529,18 @@ def main() -> None:
         ]
         display_cmd = " ".join(quote_for_display(a) for a in cmd_parts)
         print(f"Executing: {display_cmd}")
+        print(f"[Row {idx}] Output will be saved to: {output_file}")
 
         try:
-            subprocess.run(cmd_parts, check=True)
+            # Run merge.py from TEMP_DIR to ensure MoviePy temp files are created there
+            subprocess.run(cmd_parts, check=True, cwd=TEMP_DIR)
             print(f"[Row {idx}] Rendered successfully: {output_file}")
+
+            # Verify the file was created in the correct location
+            if not os.path.exists(output_file):
+                sys.stderr.write(
+                    f"[Row {idx}] WARNING: Output file not found at expected location: {output_file}\n"
+                )
         except subprocess.CalledProcessError as e:
             sys.stderr.write(
                 f"[Row {idx}] merge.py failed for '{os.path.basename(main_path)}' "
@@ -462,7 +550,8 @@ def main() -> None:
 
         # ---------- Upload via WebDAV ----------
         try:
-            remote_name = output_file
+            # Use just the filename for remote path (not full local path)
+            remote_name = os.path.basename(output_file)
             if NC_REMOTE_DIR:
                 remote_path = f"{NC_REMOTE_DIR.strip('/')}/{remote_name}"
             else:
