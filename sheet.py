@@ -65,6 +65,23 @@ VIDEO_SEARCH_DIRS = [
 RENDER_SIZE = 1080
 RENDER_FIT = "crop"  # or "pad"
 
+# Font size: Calculate as percentage of video height for configurability.
+# Allow override via env var GALLARDO_FONT_SIZE_PERCENT (e.g., 0.08334 for 90px at 1080p).
+# Default: 90px (original size) = 90/1080 ≈ 0.08334 (8.33% of video height)
+_font_pct_env = os.environ.get("GALLARDO_FONT_SIZE_PERCENT")
+try:
+    FONT_SIZE_PERCENT = (
+        float(_font_pct_env) if _font_pct_env else 0.08334
+    )  # default ≈8.33% = 90px for 1080p (original size)
+except Exception:
+    FONT_SIZE_PERCENT = 0.08334
+# Clamp sane bounds 0.05..0.3
+if FONT_SIZE_PERCENT < 0.05:
+    FONT_SIZE_PERCENT = 0.05
+if FONT_SIZE_PERCENT > 0.3:
+    FONT_SIZE_PERCENT = 0.3
+FONT_SIZE = max(24, int(RENDER_SIZE * FONT_SIZE_PERCENT))
+
 # Browser-like header for HTTP
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -526,10 +543,15 @@ def main() -> None:
             str(RENDER_SIZE),
             "--fit",
             RENDER_FIT,
+            "--fontsize",
+            str(FONT_SIZE),
         ]
         display_cmd = " ".join(quote_for_display(a) for a in cmd_parts)
         print(f"Executing: {display_cmd}")
         print(f"[Row {idx}] Output will be saved to: {output_file}")
+        print(
+            f"[Row {idx}] Using font size: {FONT_SIZE}px ({FONT_SIZE_PERCENT*100:.1f}% of {RENDER_SIZE}x{RENDER_SIZE} video)"
+        )
 
         try:
             # Run merge.py from TEMP_DIR to ensure MoviePy temp files are created there
