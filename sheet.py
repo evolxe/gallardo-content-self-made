@@ -515,9 +515,7 @@ def _mkcol_path_if_needed(base_root: str, remote_path: str, auth: tuple) -> None
         r = requests.request(
             "MKCOL", cur, auth=auth, headers=BROWSER_HEADERS, timeout=30
         )
-        logger.info(
-            "[HTTP] MKCOL %s status=%s", cur, r.status_code
-        )
+        logger.info("[HTTP] MKCOL %s status=%s", cur, r.status_code)
         if r.status_code not in (201, 405, 301, 302):
             raise RuntimeError(
                 f"MKCOL failed for {cur} (status {r.status_code}): {r.text}"
