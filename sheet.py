@@ -5,6 +5,8 @@ import shlex
 import subprocess
 import time
 import re
+import mimetypes
+from urllib.parse import parse_qs, unquote, urlparse
 from typing import Any, Optional, List
 
 import requests
@@ -135,6 +137,84 @@ VALID_LOCATIONS = {
 }
 
 
+def _filename_from_content_disposition(header: Optional[str]) -> Optional[str]:
+    if not header:
+        return None
+    parts = [p.strip() for p in header.split(";")]
+    for part in parts[1:]:
+        if not part:
+            continue
+        lower = part.lower()
+        if lower.startswith("filename*="):
+            value = part.split("=", 1)[1].strip().strip('"')
+            if "''" in value:
+                value = value.split("''", 1)[1]
+            candidate = os.path.basename(unquote(value))
+            if candidate:
+                return candidate
+        elif lower.startswith("filename="):
+            value = part.split("=", 1)[1].strip().strip('"')
+            candidate = os.path.basename(unquote(value))
+            if candidate:
+                return candidate
+    return None
+
+
+def _filename_from_query(url: str) -> Optional[str]:
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+    files = query.get("files")
+    if files:
+        candidate = os.path.basename(unquote(files[0]))
+        if candidate:
+            return candidate
+    return None
+
+
+def _guess_extension_from_content_type(
+    content_type: Optional[str], fallback: str
+) -> str:
+    if not content_type:
+        return fallback
+    main = content_type.split(";", 1)[0].strip().lower()
+    guessed = mimetypes.guess_extension(main)
+    if not guessed:
+        if "quicktime" in main:
+            return ".mov"
+        return fallback
+    if guessed == ".jpe":
+        return ".jpg"
+    if guessed == ".qt" and "quicktime" in main:
+        return ".mov"
+    return guessed
+
+
+def _determine_download_filename(
+    url: str,
+    response: Optional[requests.Response],
+    *,
+    default_basename: str = "tempfile",
+    default_ext: str = ".bin",
+) -> str:
+    candidate = _filename_from_content_disposition(
+        response.headers.get("Content-Disposition", "") if response else None
+    )
+    if not candidate:
+        candidate = _filename_from_query(url)
+    if not candidate:
+        candidate = os.path.basename(urlparse(url).path.rstrip("/"))
+
+    candidate = candidate or default_basename
+
+    name, ext = os.path.splitext(candidate)
+    if not ext:
+        content_type = response.headers.get("Content-Type") if response else None
+        ext = _guess_extension_from_content_type(content_type, fallback=default_ext)
+        candidate = candidate + ext
+
+    return candidate
+
+
 def _coerce_cell_value(value: Any) -> str:
     """
     Normalize values coming from dropdowns or objects (dicts) to a plain string.
@@ -222,7 +302,9 @@ def normalize_location(raw_value: Any, *, default: str) -> str:
     return default
 
 
-def download_nextcloud_public_file(url: str) -> Optional[str]:
+def download_nextcloud_public_file(
+    url: str, *, default_ext: str = ".mp4"
+) -> Optional[str]:
     """
     Handles Nextcloud public-share links that require a strict cookie.
     1. GET the base share page to obtain cookies
@@ -244,10 +326,9 @@ def download_nextcloud_public_file(url: str) -> Optional[str]:
         r2 = session.get(url, stream=True, timeout=120)
         r2.raise_for_status()
 
-        # Determine filename
-        filename = os.path.basename(url.split("?", 1)[0]) or "tempfile"
-        if "." not in filename:
-            filename += ".mp4"
+        filename = _determine_download_filename(
+            url, r2, default_basename="tempfile", default_ext=default_ext
+        )
 
         dest = os.path.join(TEMP_DIR, filename)
 
@@ -264,7 +345,7 @@ def download_nextcloud_public_file(url: str) -> Optional[str]:
         return None
 
 
-def download_from_url(url: str) -> Optional[str]:
+def download_from_url(url: str, *, default_ext: str = ".mp4") -> Optional[str]:
     # Normalize Nextcloud URLs to standard format
     if is_nextcloud_url(url):
         normalized_url = normalize_nextcloud_url(url)
@@ -275,13 +356,13 @@ def download_from_url(url: str) -> Optional[str]:
     # Detect Nextcloud public share link and use cookie-based method
     if "cloud.targethouse.dk" in url and "/s/" in url:
         print("[NC] Detected Nextcloud public-share URL → using cookie method")
-        return download_nextcloud_public_file(url)
+        return download_nextcloud_public_file(url, default_ext=default_ext)
 
     # Normal HTTP download
     try:
-        filename = os.path.basename(url.split("?", 1)[0]) or "tempfile"
-        if "." not in filename:
-            filename += ".mp4"
+        filename = _determine_download_filename(
+            url, r, default_basename="tempfile", default_ext=default_ext
+        )
         dest = os.path.join(TEMP_DIR, filename)
         print(f"Downloading from URL: {url}")
         r = requests.get(url, headers=BROWSER_HEADERS, stream=True, timeout=60)
@@ -297,12 +378,12 @@ def download_from_url(url: str) -> Optional[str]:
         return None
 
 
-def resolve_path(user_value: str) -> Optional[str]:
+def resolve_path(user_value: str, *, default_ext: str = ".mp4") -> Optional[str]:
     if not user_value:
         return None
     val = user_value.strip().strip('"')
     if is_url(val):
-        dl = download_from_url(val)
+        dl = download_from_url(val, default_ext=default_ext)
         return dl if dl and os.path.exists(dl) else None
 
     if os.path.isabs(val) and os.path.exists(val):
@@ -535,6 +616,7 @@ def main() -> None:
         video2_val = str(row.get("Video File Name", "")).strip()
         intro_val = str(row.get("Intro Video File Name/URL", "")).strip()
         exit_val = str(row.get("Exit Video File Name/URL", "")).strip()
+        overlay_elem_1 = str(row.get("Overlay Element 1", "")).strip()
 
         # Validate Nextcloud URLs and provide helpful error messages
         url_fields = [
@@ -542,6 +624,8 @@ def main() -> None:
             ("Intro Video File Name/URL", intro_val),
             ("Exit Video File Name/URL", exit_val),
         ]
+        if overlay_elem_1:
+            url_fields.append(("Overlay Element 1", overlay_elem_1))
 
         for field_name, field_value in url_fields:
             if field_value and field_value.startswith(("http://", "https://")):
@@ -562,7 +646,6 @@ def main() -> None:
         text2_loc = normalize_location(row.get("Text 2 Location", ""), default="bottom")
         text3_loc = normalize_location(row.get("Text 3 Location", ""), default="bottom")
 
-        overlay_elem_1 = str(row.get("Overlay Element 1", "")).strip()
         overlay_loc_1 = normalize_location(
             row.get("Overlay 1 Location", ""), default="top-right"
         )
@@ -612,7 +695,7 @@ def main() -> None:
                         f"  Value: {overlay_elem_1}\n"
                     )
 
-            overlay_elem_path = resolve_path(overlay_elem_1) or ""
+            overlay_elem_path = resolve_path(overlay_elem_1, default_ext=".png") or ""
             if not overlay_elem_path:
                 sys.stderr.write(
                     f"[Row {idx}] Warning: could not resolve 'Overlay Element 1': {overlay_elem_1}; continuing without overlay.\n"
