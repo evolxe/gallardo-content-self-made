@@ -44,10 +44,14 @@ def attach_log_streams(module_name: str) -> None:
     if not err_log:
         err_log = logs_dir / f"{module_name}_err_{timestamp}.log"
 
-    if not isinstance(sys.stdout, _TeeStream) or getattr(sys.stdout, "_log_path", None) != Path(run_log):
+    if not isinstance(sys.stdout, _TeeStream) or getattr(
+        sys.stdout, "_log_path", None
+    ) != Path(run_log):
         sys.stdout = _TeeStream(sys.stdout, run_log)
 
-    if not isinstance(sys.stderr, _TeeStream) or getattr(sys.stderr, "_log_path", None) != Path(err_log):
+    if not isinstance(sys.stderr, _TeeStream) or getattr(
+        sys.stderr, "_log_path", None
+    ) != Path(err_log):
         sys.stderr = _TeeStream(sys.stderr, err_log)
 
     if not logging.getLogger().handlers:
@@ -132,4 +136,3 @@ def log_call(logger: logging.Logger):
         return wrapper
 
     return decorator
-
