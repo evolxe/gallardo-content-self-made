@@ -2,8 +2,10 @@ import functools
 import logging
 import os
 import sys
+import traceback
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 
 class _TeeStream:
@@ -58,6 +60,59 @@ def attach_log_streams(module_name: str) -> None:
 
 def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
+
+
+def write_sheet_value(
+    logger: logging.Logger,
+    worksheet,
+    row_idx: int,
+    col_idx: Optional[int],
+    value: str,
+    *,
+    context: str = "status",
+) -> None:
+    if not worksheet or not col_idx:
+        logger.debug(
+            "Skipping sheet write for row %s context '%s' (worksheet or column missing)",
+            row_idx,
+            context,
+        )
+        return
+    try:
+        worksheet.update_cell(row_idx, col_idx, value)
+    except Exception as exc:
+        logger.error(
+            "Failed to write '%s' for row %s: %s", context, row_idx, exc, exc_info=True
+        )
+
+
+def record_error(
+    logger: logging.Logger,
+    worksheet,
+    row_idx: int,
+    col_idx: Optional[int],
+    user_message: str,
+    *,
+    details: Optional[str] = None,
+    exception: Optional[BaseException] = None,
+) -> None:
+    extra = details or ""
+    if exception:
+        if not details:
+            extra = "".join(
+                traceback.format_exception(
+                    exception.__class__, exception, exception.__traceback__
+                )
+            )
+    logger.error("Row %s error: %s %s", row_idx, user_message, extra)
+    write_sheet_value(
+        logger,
+        worksheet,
+        row_idx,
+        col_idx,
+        user_message,
+        context="error message",
+    )
 
 
 def log_call(logger: logging.Logger):

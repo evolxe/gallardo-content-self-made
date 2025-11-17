@@ -1,5 +1,4 @@
 # sheets_url.py
-import logging
 import sys
 import os
 import shlex
@@ -16,7 +15,13 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 from config import BASE_DIR, get_env
-from log_utils import attach_log_streams, get_logger, log_call
+from log_utils import (
+    attach_log_streams,
+    get_logger,
+    log_call,
+    record_error,
+    write_sheet_value,
+)
 from late_post import post_video_to_all_accounts
 from validation import validate_nextcloud_url, normalize_nextcloud_url, is_nextcloud_url
 
@@ -463,18 +468,15 @@ def resolve_path(user_value: str, *, default_ext: str = ".mp4") -> Optional[str]
 def set_generate_state(
     worksheet, row_idx: int, col_idx: int, state: str, *, log_prefix: str = "Generate"
 ) -> None:
-    try:
-        print(f"[Row {row_idx}] Setting '{log_prefix}' to {state}...")
-        worksheet.update_cell(row_idx, col_idx, state)
-        verify_value = worksheet.cell(row_idx, col_idx).value
-        if str(verify_value).strip().upper() != state.upper():
-            print(
-                f"[Row {row_idx}] ⚠ WARNING: Expected '{state}' but cell contains '{verify_value}'"
-            )
-    except Exception as e:
-        sys.stderr.write(
-            f"[Row {row_idx}] Failed to update '{log_prefix}' cell to '{state}':\n{e}\n"
-        )
+    logger.info("[Row %s] Setting '%s' to %s", row_idx, log_prefix, state)
+    write_sheet_value(
+        logger,
+        worksheet,
+        row_idx,
+        col_idx,
+        state,
+        context=log_prefix,
+    )
 
 
 def quote_for_display(arg: str) -> str:
@@ -685,6 +687,7 @@ def main() -> None:
         "Text 3 Location",
         "Overlay Element 1",
         "Overlay 1 Location",
+        "Error Message",
     ]
 
     for col in required_columns:
@@ -708,6 +711,7 @@ def main() -> None:
         )
 
     generate_col_index = headers.index("Generate") + 1
+    error_col_index = headers.index("Error Message") + 1
     print(f"[Info] 'Generate' column found at index {generate_col_index}")
 
     any_executed = False
@@ -717,6 +721,7 @@ def main() -> None:
             continue
 
         logger.info("[Row %s] Raw row data: %s", idx, row)
+        write_sheet_value(logger, ws, idx, error_col_index, "", context="error clear")
         video2_val = str(row.get("Video File Name", "")).strip()
         intro_val = str(row.get("Intro Video File Name/URL", "")).strip()
         exit_val = str(row.get("Exit Video File Name/URL", "")).strip()
@@ -776,6 +781,14 @@ def main() -> None:
         if schedule_raw:
             schedule_value = parse_schedule_datetime(schedule_raw, idx)
             if not schedule_value:
+                record_error(
+                    logger,
+                    ws,
+                    idx,
+                    error_col_index,
+                    f"Schedule DateTime '{schedule_raw}' is invalid. Use YYYY-MM-DD HH:MM:SS or M/D/YYYY HH:MM:SS.",
+                )
+                set_generate_state(ws, idx, generate_col_index, "TRUE")
                 continue
         logger.info("[Row %s] Normalized schedule datetime: %s", idx, schedule_value)
         post_text_payload = (
@@ -784,9 +797,9 @@ def main() -> None:
         )
 
         if not video2_val or not intro_val or not exit_val:
-            sys.stderr.write(
-                f"[Row {idx}] Skipping: missing one or more required file fields.\n"
-            )
+            message = "Missing required video references. Intro, Video File Name, and Exit values must be provided."
+            sys.stderr.write(f"[Row {idx}] {message}\n")
+            record_error(logger, ws, idx, error_col_index, message)
             continue
 
         intro_path = resolve_path(intro_val)
@@ -810,10 +823,12 @@ def main() -> None:
             missing.append(f"Exit '{exit_val}'")
 
         if missing:
-            sys.stderr.write(
-                f"[Row {idx}] Skipping: could not find file(s): {', '.join(missing)}\n"
-                f"  Searched: {', '.join(VIDEO_SEARCH_DIRS)}\n"
+            message = (
+                f"Could not locate file(s): {', '.join(missing)}. "
+                f"Checked folders: {', '.join(VIDEO_SEARCH_DIRS)}."
             )
+            sys.stderr.write(f"[Row {idx}] {message}\n")
+            record_error(logger, ws, idx, error_col_index, message)
             continue
 
         set_generate_state(ws, idx, generate_col_index, "LOADING")
@@ -894,6 +909,14 @@ def main() -> None:
                 f"[Row {idx}] merge.py failed for '{os.path.basename(main_path)}' "
                 f"with exit code {e.returncode}.\n"
             )
+            record_error(
+                logger,
+                ws,
+                idx,
+                error_col_index,
+                "Video rendering failed. Please review merge.py logs.",
+                exception=e,
+            )
             set_generate_state(ws, idx, generate_col_index, "TRUE")
             continue
 
@@ -917,6 +940,14 @@ def main() -> None:
             print(f"[Row {idx}] Upload complete: {webdav_url}")
         except Exception as e:
             sys.stderr.write(f"[Row {idx}] Upload failed for {output_file}:\n{e}\n")
+            record_error(
+                logger,
+                ws,
+                idx,
+                error_col_index,
+                "Upload to Nextcloud failed. Please verify storage space and credentials.",
+                exception=e,
+            )
             set_generate_state(ws, idx, generate_col_index, "TRUE")
             continue
 
@@ -1008,6 +1039,14 @@ def main() -> None:
             print(error_msg)  # Also print to stdout so it's visible
             share_url = None
             download_url = None
+            record_error(
+                logger,
+                ws,
+                idx,
+                error_col_index,
+                "Could not create a Nextcloud share link. Please try again later.",
+                exception=e,
+            )
 
         # ---------- Social posting via Late ----------
         if share_url:
@@ -1026,6 +1065,14 @@ def main() -> None:
                 print(f"[Row {idx}] Late post created successfully: {late_response}")
             except Exception as e:
                 sys.stderr.write(f"[Row {idx}] Late posting failed:\n{e}\n")
+                record_error(
+                    logger,
+                    ws,
+                    idx,
+                    error_col_index,
+                    "Late social posting failed. Please review Late API credentials/logs.",
+                    exception=e,
+                )
 
         # ---------- Flip Generate to FALSE ----------
         set_generate_state(ws, idx, generate_col_index, "FALSE")
