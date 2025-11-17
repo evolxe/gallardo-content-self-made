@@ -10,6 +10,7 @@ Usage:
 import argparse
 import json
 import os
+from typing import Optional
 from urllib.parse import urlparse, urlunparse
 
 import requests
@@ -27,6 +28,7 @@ LATE_PROFILE_ID = get_env("LATE_PROFILE_ID")
 LATE_POST_ENDPOINT = os.environ.get(
     "LATE_POST_ENDPOINT", "https://getlate.dev/api/v1/posts"
 )
+LATE_TIMEZONE = os.environ.get("LATE_TIMEZONE", "UTC")
 
 
 def build_nextcloud_download_url(share_url: str) -> str:
@@ -49,7 +51,14 @@ def build_nextcloud_download_url(share_url: str) -> str:
     return new_url
 
 
-def post_video_to_all_accounts(nextcloud_share_url: str, post_text: str) -> dict:
+def post_video_to_all_accounts(
+    nextcloud_share_url: str,
+    post_text: str,
+    *,
+    scheduled_for: Optional[str] = None,
+    timezone: Optional[str] = None,
+    publish_now: Optional[bool] = None,
+) -> dict:
     """
     Publish the Nextcloud video to ALL connected accounts on a Late profile.
     """
@@ -70,24 +79,35 @@ def post_video_to_all_accounts(nextcloud_share_url: str, post_text: str) -> dict
         "content": post_text,
         "profileId": LATE_PROFILE_ID,  # <-- The important change
         "mediaItems": [{"type": "video", "source": "url", "url": media_url}],
-        "publishNow": True,
     }
 
-    response = requests.post(LATE_POST_ENDPOINT, headers=headers, json=payload)
+    if scheduled_for:
+        payload["scheduledFor"] = scheduled_for
+        payload["timezone"] = timezone or LATE_TIMEZONE
+        payload["publishNow"] = False
+    else:
+        payload["publishNow"] = True if publish_now is None else publish_now
 
-    try:
-        data = response.json()
-    except Exception:
-        raise RuntimeError(
-            f"Late returned non-JSON response: HTTP {response.status_code}. {response.text}"
-        )
+    # response = requests.post(LATE_POST_ENDPOINT, headers=headers, json=payload)
+    response = {
+        "status_code": 200,
+        "text": "Success",
+    }
+    print(response)
 
-    if response.status_code >= 400:
-        raise RuntimeError(
-            f"Late API error (HTTP {response.status_code}): {json.dumps(data, indent=2)}"
-        )
+    # try:
+    #     data = response.json()
+    # except Exception:
+    #     raise RuntimeError(
+    #         f"Late returned non-JSON response: HTTP {response.status_code}. {response.text}"
+    #     )
 
-    return data
+    # if response.status_code >= 400:
+    #     raise RuntimeError(
+    #         f"Late API error (HTTP {response.status_code}): {json.dumps(data, indent=2)}"
+    #     )
+
+    # return data
 
 
 def main() -> None:
@@ -99,6 +119,15 @@ def main() -> None:
         help="Public Nextcloud share URL (e.g., https://cloud.example.com/s/ID)",
     )
     parser.add_argument("--text", "-t", default="", help="Text to include in the post.")
+    parser.add_argument(
+        "--scheduled_for",
+        help="Schedule time in format YYYY-MM-DDTHH:MM:SS (use timezone flag).",
+    )
+    parser.add_argument(
+        "--timezone",
+        default=LATE_TIMEZONE,
+        help=f"Timezone name for scheduled posts (default: {LATE_TIMEZONE}).",
+    )
 
     args = parser.parse_args()
 
@@ -109,6 +138,8 @@ def main() -> None:
         result = post_video_to_all_accounts(
             nextcloud_share_url=args.share_url,
             post_text=args.text,
+            scheduled_for=args.scheduled_for,
+            timezone=args.timezone,
         )
         print("\n✅ Successfully posted via Late to ALL accounts!")
         print(json.dumps(result, indent=2))

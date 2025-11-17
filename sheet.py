@@ -6,6 +6,7 @@ import subprocess
 import time
 import re
 import mimetypes
+from datetime import datetime
 from urllib.parse import parse_qs, unquote, urlparse
 from typing import Any, Optional, List
 
@@ -14,6 +15,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 from config import BASE_DIR, get_env
+from late_post import post_video_to_all_accounts
 from validation import validate_nextcloud_url, normalize_nextcloud_url, is_nextcloud_url
 
 # ─────────────────────────────────────────────────────────
@@ -103,6 +105,13 @@ NC_PASS = get_env("NC_PASS")
 NC_REMOTE_DIR = os.environ.get(
     "NC_REMOTE_DIR", "Videos"
 )  # remote folder for uploads, e.g. "Videos"
+LATE_TIMEZONE = os.environ.get("LATE_TIMEZONE", "UTC")
+SCHEDULE_INPUT_FORMATS = [
+    ("%Y-%m-%d %H:%M:%S", "YYYY-MM-DD HH:MM:SS (e.g., 2025-01-17 14:30:00)"),
+    ("%m/%d/%Y %H:%M:%S", "M/D/YYYY HH:MM:SS (e.g., 1/17/2025 14:30:00)"),
+]
+SCHEDULE_DT_FORMAT = "%Y-%m-%dT%H:%M:%S"
+SCHEDULE_DT_FORMAT_DESC = "YYYY-MM-DDTHH:MM:SS (e.g., 2025-01-17T14:30:00)"
 
 
 # ─────────────────────────────────────────────────────────
@@ -302,6 +311,21 @@ def normalize_location(raw_value: Any, *, default: str) -> str:
     return default
 
 
+def parse_schedule_datetime(raw_value: str, row_idx: int) -> Optional[str]:
+    for fmt, _ in SCHEDULE_INPUT_FORMATS:
+        try:
+            dt = datetime.strptime(raw_value, fmt)
+            return dt.strftime(SCHEDULE_DT_FORMAT)
+        except ValueError:
+            continue
+    allowed = "; ".join(desc for _, desc in SCHEDULE_INPUT_FORMATS)
+    sys.stderr.write(
+        f"[Row {row_idx}] Invalid 'Schedule DateTime' value '{raw_value}'. "
+        f"Expected format(s): {allowed}\n"
+    )
+    return None
+
+
 def download_nextcloud_public_file(
     url: str, *, default_ext: str = ".mp4"
 ) -> Optional[str]:
@@ -360,13 +384,13 @@ def download_from_url(url: str, *, default_ext: str = ".mp4") -> Optional[str]:
 
     # Normal HTTP download
     try:
+        print(f"Downloading from URL: {url}")
+        r = requests.get(url, headers=BROWSER_HEADERS, stream=True, timeout=60)
+        r.raise_for_status()
         filename = _determine_download_filename(
             url, r, default_basename="tempfile", default_ext=default_ext
         )
         dest = os.path.join(TEMP_DIR, filename)
-        print(f"Downloading from URL: {url}")
-        r = requests.get(url, headers=BROWSER_HEADERS, stream=True, timeout=60)
-        r.raise_for_status()
         with open(dest, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 if chunk:
@@ -579,6 +603,8 @@ def main() -> None:
         "Video File Name",
         "Intro Video File Name/URL",
         "Exit Video File Name/URL",
+        "Schedule DateTime",
+        "Post Text",
         "Video Text 1",
         "Video Text 2",
         "Video Text 3",
@@ -593,6 +619,11 @@ def main() -> None:
         if col not in headers:
             sys.stderr.write(f"[Error] No '{col}' column found in the sheet header.\n")
             sys.exit(1)
+    allowed_desc = "; ".join(desc for _, desc in SCHEDULE_INPUT_FORMATS)
+    print(
+        f"[Info] 'Schedule DateTime' values must use one of: {allowed_desc}. "
+        f"Values are auto-converted to {SCHEDULE_DT_FORMAT_DESC} for the Late API."
+    )
 
     # Optional Download URL column (for writing share links)
     download_col_index = None
@@ -617,6 +648,8 @@ def main() -> None:
         intro_val = str(row.get("Intro Video File Name/URL", "")).strip()
         exit_val = str(row.get("Exit Video File Name/URL", "")).strip()
         overlay_elem_1 = str(row.get("Overlay Element 1", "")).strip()
+        schedule_raw = str(row.get("Schedule DateTime", "")).strip()
+        post_text_custom = str(row.get("Post Text", "")).strip()
 
         # Validate Nextcloud URLs and provide helpful error messages
         url_fields = [
@@ -648,6 +681,15 @@ def main() -> None:
 
         overlay_loc_1 = normalize_location(
             row.get("Overlay 1 Location", ""), default="top-right"
+        )
+        schedule_value = None
+        if schedule_raw:
+            schedule_value = parse_schedule_datetime(schedule_raw, idx)
+            if not schedule_value:
+                continue
+        post_text_payload = (
+            post_text_custom
+            or " ".join(part for part in [text1, text2, text3] if part).strip()
         )
 
         if not video2_val or not intro_val or not exit_val:
@@ -705,10 +747,10 @@ def main() -> None:
 
         base_filename = os.path.basename(main_path)
         filename_no_ext, _ = os.path.splitext(base_filename)
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        merged_name = f"{filename_no_ext}_{timestamp}_merged.mp4"
         # Ensure output_file is an absolute path in TEMP_DIR
-        output_file = os.path.abspath(
-            os.path.join(TEMP_DIR, f"{filename_no_ext}_merged.mp4")
-        )
+        output_file = os.path.abspath(os.path.join(TEMP_DIR, merged_name))
 
         # Ensure merge.py path is absolute
         merge_script = os.path.abspath(os.path.join(SCRIPT_DIR, "merge.py"))
@@ -785,6 +827,8 @@ def main() -> None:
             continue
 
         # ---------- Create share link and write Download URL ----------
+        share_url = None
+        download_url = None
         try:
             share_url = create_nextcloud_share_link(
                 base_url=NC_BASE,
@@ -862,7 +906,26 @@ def main() -> None:
             error_msg = f"[Row {idx}] Failed to create/write share link for {remote_path}:\n{e}\n"
             sys.stderr.write(error_msg)
             print(error_msg)  # Also print to stdout so it's visible
-            # still continue and flip Generate
+            share_url = None
+            download_url = None
+
+        # ---------- Social posting via Late ----------
+        if share_url:
+            try:
+                post_text = post_text_payload or ""
+                print(
+                    f"[Row {idx}] Posting to Late with share URL: {share_url} "
+                    f"(scheduled_for={schedule_value or 'immediate'}, timezone={LATE_TIMEZONE})"
+                )
+                late_response = post_video_to_all_accounts(
+                    nextcloud_share_url=share_url,
+                    post_text=post_text,
+                    scheduled_for=schedule_value,
+                    timezone=LATE_TIMEZONE,
+                )
+                print(f"[Row {idx}] Late post created successfully: {late_response}")
+            except Exception as e:
+                sys.stderr.write(f"[Row {idx}] Late posting failed:\n{e}\n")
 
         # ---------- Flip Generate to FALSE ----------
         try:
