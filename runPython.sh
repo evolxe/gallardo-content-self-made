@@ -26,7 +26,7 @@ log "Starting runPython.sh"
 # Configure default font size percent for video text (can be overridden in env)
 # Default: 0.08334 = 90px for 1080p (original size)
 # Example to override: export GALLARDO_FONT_SIZE_PERCENT=0.18
-export GALLARDO_FONT_SIZE_PERCENT="${GALLARDO_FONT_SIZE_PERCENT:-0.08334}"
+export GALLARDO_FONT_SIZE_PERCENT="${GALLARDO_FONT_SIZE_PERCENT:-0.06334}"
 log "Using GALLARDO_FONT_SIZE_PERCENT=$GALLARDO_FONT_SIZE_PERCENT"
 
 # Check if Python is available

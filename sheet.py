@@ -71,10 +71,10 @@ RENDER_FIT = "crop"  # or "pad"
 _font_pct_env = os.environ.get("GALLARDO_FONT_SIZE_PERCENT")
 try:
     FONT_SIZE_PERCENT = (
-        float(_font_pct_env) if _font_pct_env else 0.08334
+        float(_font_pct_env) if _font_pct_env else 0.06334
     )  # default ≈8.33% = 90px for 1080p (original size)
 except Exception:
-    FONT_SIZE_PERCENT = 0.08334
+    FONT_SIZE_PERCENT = 0.06334
 # Clamp sane bounds 0.05..0.3
 if FONT_SIZE_PERCENT < 0.05:
     FONT_SIZE_PERCENT = 0.05
