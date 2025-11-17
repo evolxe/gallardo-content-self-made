@@ -9,6 +9,7 @@ Usage:
 
 import argparse
 import json
+import logging
 import os
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
@@ -16,6 +17,7 @@ from urllib.parse import urlparse, urlunparse
 import requests
 
 from config import get_env
+from log_utils import attach_log_streams, get_logger, log_call
 
 # ------------------------------------------------------------
 # Late API Credentials
@@ -30,7 +32,11 @@ LATE_POST_ENDPOINT = os.environ.get(
 )
 LATE_TIMEZONE = os.environ.get("LATE_TIMEZONE", "UTC")
 
+attach_log_streams("late_post")
+logger = get_logger("gallardo.late_post")
 
+
+@log_call(logger)
 def build_nextcloud_download_url(share_url: str) -> str:
     """
     Convert Nextcloud share link to a direct download link.
@@ -51,6 +57,7 @@ def build_nextcloud_download_url(share_url: str) -> str:
     return new_url
 
 
+@log_call(logger)
 def post_video_to_all_accounts(
     nextcloud_share_url: str,
     post_text: str,
@@ -88,28 +95,36 @@ def post_video_to_all_accounts(
     else:
         payload["publishNow"] = True if publish_now is None else publish_now
 
-    # response = requests.post(LATE_POST_ENDPOINT, headers=headers, json=payload)
-    response = {
-        "status_code": 200,
-        "text": "Success",
-    }
-    print(response)
+    logger.info(
+        "[Late API] POST %s payload=%s headers=%s",
+        LATE_POST_ENDPOINT,
+        payload,
+        headers,
+    )
+    response = requests.post(LATE_POST_ENDPOINT, headers=headers, json=payload)
+    logger.info(
+        "[Late API] Response status=%s body=%s headers=%s",
+        response.status_code,
+        response.text,
+        dict(response.headers),
+    )
 
-    # try:
-    #     data = response.json()
-    # except Exception:
-    #     raise RuntimeError(
-    #         f"Late returned non-JSON response: HTTP {response.status_code}. {response.text}"
-    #     )
+    try:
+        data = response.json()
+    except Exception:
+        raise RuntimeError(
+            f"Late returned non-JSON response: HTTP {response.status_code}. {response.text}"
+        )
 
-    # if response.status_code >= 400:
-    #     raise RuntimeError(
-    #         f"Late API error (HTTP {response.status_code}): {json.dumps(data, indent=2)}"
-    #     )
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"Late API error (HTTP {response.status_code}): {json.dumps(data, indent=2)}"
+        )
 
-    # return data
+    return data
 
 
+@log_call(logger)
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Post a Nextcloud-hosted video to ALL accounts via Late."
@@ -131,8 +146,11 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    print(f"Original Nextcloud URL: {args.share_url}")
-    print(f"Derived download URL: {build_nextcloud_download_url(args.share_url)}")
+    logger.info("Original Nextcloud URL: %s", args.share_url)
+    logger.info(
+        "Derived download URL: %s",
+        build_nextcloud_download_url(args.share_url),
+    )
 
     try:
         result = post_video_to_all_accounts(
@@ -141,11 +159,10 @@ def main() -> None:
             scheduled_for=args.scheduled_for,
             timezone=args.timezone,
         )
-        print("\n✅ Successfully posted via Late to ALL accounts!")
-        print(json.dumps(result, indent=2))
+        logger.info("Successfully posted via Late to ALL accounts: %s", result)
 
     except Exception as e:
-        print(f"\n❌ ERROR posting to Late:\n{e}")
+        logger.error("ERROR posting to Late: %s", e)
 
 
 if __name__ == "__main__":

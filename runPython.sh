@@ -13,15 +13,28 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 # Virtual environment directory
 VENV_DIR="$SCRIPT_DIR/venv"
 
-# Log file (optional, for cron debugging)
-LOG_FILE="$SCRIPT_DIR/runPython.log"
+# Logging setup
+LOG_DIR="$SCRIPT_DIR/logs"
+mkdir -p "$LOG_DIR"
 
-# Function to log messages
+TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
+RUN_LOG="$LOG_DIR/run_$TIMESTAMP.log"
+ERR_LOG="$LOG_DIR/error_$TIMESTAMP.log"
+
+touch "$RUN_LOG" "$ERR_LOG"
+
+exec > >(tee -a "$RUN_LOG") 2> >(tee -a "$ERR_LOG" >&2)
+
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
 log "Starting runPython.sh"
+log "Stdout log: $RUN_LOG"
+log "Stderr log: $ERR_LOG"
+
+export GALLARDO_RUN_LOG="$RUN_LOG"
+export GALLARDO_ERR_LOG="$ERR_LOG"
 
 # Configure default font size percent for video text (can be overridden in env)
 # Default: 0.08334 = 90px for 1080p (original size)

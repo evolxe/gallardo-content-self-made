@@ -52,6 +52,5 @@ gallardo-sheets-bot-3a8479c8d627.json
 .env
 .venv/
 venv/
-runPython.log
+logs/
 __pycache__/
-.env

@@ -1,4 +1,5 @@
 # sheets_url.py
+import logging
 import sys
 import os
 import shlex
@@ -15,8 +16,12 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 from config import BASE_DIR, get_env
+from log_utils import attach_log_streams, get_logger, log_call
 from late_post import post_video_to_all_accounts
 from validation import validate_nextcloud_url, normalize_nextcloud_url, is_nextcloud_url
+
+attach_log_streams("sheet")
+logger = get_logger("gallardo.sheet")
 
 # ─────────────────────────────────────────────────────────
 # CONFIG
@@ -119,6 +124,7 @@ SCHEDULE_DT_FORMAT_DESC = "YYYY-MM-DDTHH:MM:SS (e.g., 2025-01-17T14:30:00)"
 # ─────────────────────────────────────────────────────────
 
 
+@log_call(logger)
 def truthy_generate(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -129,6 +135,7 @@ def truthy_generate(value: Any) -> bool:
     return s in {"true", "yes", "y", "1", "on"}
 
 
+@log_call(logger)
 def is_url(s: str) -> bool:
     return isinstance(s, str) and (s.startswith("http://") or s.startswith("https://"))
 
@@ -146,6 +153,7 @@ VALID_LOCATIONS = {
 }
 
 
+@log_call(logger)
 def _filename_from_content_disposition(header: Optional[str]) -> Optional[str]:
     if not header:
         return None
@@ -169,6 +177,7 @@ def _filename_from_content_disposition(header: Optional[str]) -> Optional[str]:
     return None
 
 
+@log_call(logger)
 def _filename_from_query(url: str) -> Optional[str]:
     parsed = urlparse(url)
     query = parse_qs(parsed.query)
@@ -180,6 +189,7 @@ def _filename_from_query(url: str) -> Optional[str]:
     return None
 
 
+@log_call(logger)
 def _guess_extension_from_content_type(
     content_type: Optional[str], fallback: str
 ) -> str:
@@ -198,6 +208,7 @@ def _guess_extension_from_content_type(
     return guessed
 
 
+@log_call(logger)
 def _determine_download_filename(
     url: str,
     response: Optional[requests.Response],
@@ -224,6 +235,7 @@ def _determine_download_filename(
     return candidate
 
 
+@log_call(logger)
 def _coerce_cell_value(value: Any) -> str:
     """
     Normalize values coming from dropdowns or objects (dicts) to a plain string.
@@ -245,6 +257,7 @@ def _coerce_cell_value(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+@log_call(logger)
 def normalize_location(raw_value: Any, *, default: str) -> str:
     """
     Accept user-friendly dropdown labels (e.g., 'Top Center') and convert them
@@ -311,6 +324,7 @@ def normalize_location(raw_value: Any, *, default: str) -> str:
     return default
 
 
+@log_call(logger)
 def parse_schedule_datetime(raw_value: str, row_idx: int) -> Optional[str]:
     for fmt, _ in SCHEDULE_INPUT_FORMATS:
         try:
@@ -326,6 +340,7 @@ def parse_schedule_datetime(raw_value: str, row_idx: int) -> Optional[str]:
     return None
 
 
+@log_call(logger)
 def download_nextcloud_public_file(
     url: str, *, default_ext: str = ".mp4"
 ) -> Optional[str]:
@@ -343,11 +358,23 @@ def download_nextcloud_public_file(
         base_url = url.replace("/download", "")
         print(f"[NC] Visiting share page to obtain cookies: {base_url}")
         r1 = session.get(base_url, timeout=30)
+        logger.info(
+            "[HTTP] GET %s status=%s headers=%s",
+            base_url,
+            r1.status_code,
+            dict(r1.headers),
+        )
         r1.raise_for_status()
 
         # Step 2 — request the actual file
         print(f"[NC] Downloading with session cookies: {url}")
         r2 = session.get(url, stream=True, timeout=120)
+        logger.info(
+            "[HTTP] GET %s status=%s headers=%s",
+            url,
+            r2.status_code,
+            dict(r2.headers),
+        )
         r2.raise_for_status()
 
         filename = _determine_download_filename(
@@ -369,6 +396,7 @@ def download_nextcloud_public_file(
         return None
 
 
+@log_call(logger)
 def download_from_url(url: str, *, default_ext: str = ".mp4") -> Optional[str]:
     # Normalize Nextcloud URLs to standard format
     if is_nextcloud_url(url):
@@ -386,6 +414,12 @@ def download_from_url(url: str, *, default_ext: str = ".mp4") -> Optional[str]:
     try:
         print(f"Downloading from URL: {url}")
         r = requests.get(url, headers=BROWSER_HEADERS, stream=True, timeout=60)
+        logger.info(
+            "[HTTP] GET %s status=%s headers=%s",
+            url,
+            r.status_code,
+            dict(r.headers),
+        )
         r.raise_for_status()
         filename = _determine_download_filename(
             url, r, default_basename="tempfile", default_ext=default_ext
@@ -402,6 +436,7 @@ def download_from_url(url: str, *, default_ext: str = ".mp4") -> Optional[str]:
         return None
 
 
+@log_call(logger)
 def resolve_path(user_value: str, *, default_ext: str = ".mp4") -> Optional[str]:
     if not user_value:
         return None
@@ -424,6 +459,24 @@ def resolve_path(user_value: str, *, default_ext: str = ".mp4") -> Optional[str]
     return None
 
 
+@log_call(logger)
+def set_generate_state(
+    worksheet, row_idx: int, col_idx: int, state: str, *, log_prefix: str = "Generate"
+) -> None:
+    try:
+        print(f"[Row {row_idx}] Setting '{log_prefix}' to {state}...")
+        worksheet.update_cell(row_idx, col_idx, state)
+        verify_value = worksheet.cell(row_idx, col_idx).value
+        if str(verify_value).strip().upper() != state.upper():
+            print(
+                f"[Row {row_idx}] ⚠ WARNING: Expected '{state}' but cell contains '{verify_value}'"
+            )
+    except Exception as e:
+        sys.stderr.write(
+            f"[Row {row_idx}] Failed to update '{log_prefix}' cell to '{state}':\n{e}\n"
+        )
+
+
 def quote_for_display(arg: str) -> str:
     return f'"{arg}"' if os.name == "nt" else shlex.quote(arg)
 
@@ -433,16 +486,19 @@ def quote_for_display(arg: str) -> str:
 # ─────────────────────────────────────────────────────────
 
 
+@log_call(logger)
 def _ensure_trailing_slash(url: str) -> str:
     return url if url.endswith("/") else url + "/"
 
 
+@log_call(logger)
 def _webdav_root(base: str, username: str) -> str:
     return _ensure_trailing_slash(
         base.rstrip("/") + f"/remote.php/dav/files/{username}"
     )
 
 
+@log_call(logger)
 def _mkcol_path_if_needed(base_root: str, remote_path: str, auth: tuple) -> None:
     """
     Ensure intermediate directories exist via MKCOL (idempotent).
@@ -459,12 +515,16 @@ def _mkcol_path_if_needed(base_root: str, remote_path: str, auth: tuple) -> None
         r = requests.request(
             "MKCOL", cur, auth=auth, headers=BROWSER_HEADERS, timeout=30
         )
+        logger.info(
+            "[HTTP] MKCOL %s status=%s", cur, r.status_code
+        )
         if r.status_code not in (201, 405, 301, 302):
             raise RuntimeError(
                 f"MKCOL failed for {cur} (status {r.status_code}): {r.text}"
             )
 
 
+@log_call(logger)
 def upload_webdav_authenticated(
     base_url: str,
     username: str,
@@ -490,11 +550,18 @@ def upload_webdav_authenticated(
         r = requests.put(
             target_url, data=f, auth=auth, headers=BROWSER_HEADERS, timeout=180
         )
+    logger.info(
+        "[HTTP] PUT %s status=%s headers=%s",
+        target_url,
+        r.status_code,
+        dict(r.headers),
+    )
     if r.status_code not in (200, 201, 204):
         raise RuntimeError(f"Upload failed (status {r.status_code}): {r.text}")
     return target_url
 
 
+@log_call(logger)
 def create_nextcloud_share_link(
     base_url: str,
     username: str,
@@ -528,6 +595,13 @@ def create_nextcloud_share_link(
         data=data,
         params=params,
         timeout=30,
+    )
+    logger.info(
+        "[HTTP] POST %s status=%s payload=%s response=%s",
+        url,
+        resp.status_code,
+        data,
+        resp.text,
     )
     if resp.status_code not in (200, 201):
         raise RuntimeError(
@@ -644,12 +718,23 @@ def main() -> None:
         if not truthy_generate(row.get("Generate")):
             continue
 
+        logger.info("[Row %s] Raw row data: %s", idx, row)
         video2_val = str(row.get("Video File Name", "")).strip()
         intro_val = str(row.get("Intro Video File Name/URL", "")).strip()
         exit_val = str(row.get("Exit Video File Name/URL", "")).strip()
         overlay_elem_1 = str(row.get("Overlay Element 1", "")).strip()
         schedule_raw = str(row.get("Schedule DateTime", "")).strip()
         post_text_custom = str(row.get("Post Text", "")).strip()
+        logger.info(
+            "[Row %s] Values video2=%s intro=%s exit=%s overlay=%s schedule=%s post_text=%s",
+            idx,
+            video2_val,
+            intro_val,
+            exit_val,
+            overlay_elem_1,
+            schedule_raw,
+            post_text_custom,
+        )
 
         # Validate Nextcloud URLs and provide helpful error messages
         url_fields = [
@@ -674,6 +759,13 @@ def main() -> None:
         text1 = str(row.get("Video Text 1", "")).strip()
         text2 = str(row.get("Video Text 2", "")).strip()
         text3 = str(row.get("Video Text 3", "")).strip()
+        logger.info(
+            "[Row %s] Text fields: t1=%s t2=%s t3=%s",
+            idx,
+            text1,
+            text2,
+            text3,
+        )
 
         text1_loc = normalize_location(row.get("Text 1 Location", ""), default="bottom")
         text2_loc = normalize_location(row.get("Text 2 Location", ""), default="bottom")
@@ -687,6 +779,7 @@ def main() -> None:
             schedule_value = parse_schedule_datetime(schedule_raw, idx)
             if not schedule_value:
                 continue
+        logger.info("[Row %s] Normalized schedule datetime: %s", idx, schedule_value)
         post_text_payload = (
             post_text_custom
             or " ".join(part for part in [text1, text2, text3] if part).strip()
@@ -724,6 +817,8 @@ def main() -> None:
                 f"  Searched: {', '.join(VIDEO_SEARCH_DIRS)}\n"
             )
             continue
+
+        set_generate_state(ws, idx, generate_col_index, "LOADING")
 
         # Overlay element may be URL or path
         overlay_elem_path = ""
@@ -801,6 +896,7 @@ def main() -> None:
                 f"[Row {idx}] merge.py failed for '{os.path.basename(main_path)}' "
                 f"with exit code {e.returncode}.\n"
             )
+            set_generate_state(ws, idx, generate_col_index, "TRUE")
             continue
 
         # ---------- Upload via WebDAV ----------
@@ -823,7 +919,7 @@ def main() -> None:
             print(f"[Row {idx}] Upload complete: {webdav_url}")
         except Exception as e:
             sys.stderr.write(f"[Row {idx}] Upload failed for {output_file}:\n{e}\n")
-            # do not flip Generate if upload fails
+            set_generate_state(ws, idx, generate_col_index, "TRUE")
             continue
 
         # ---------- Create share link and write Download URL ----------
@@ -851,6 +947,12 @@ def main() -> None:
                         headers=BROWSER_HEADERS,
                         timeout=10,
                         allow_redirects=True,
+                    )
+                    logger.info(
+                        "[HTTP] HEAD %s status=%s headers=%s",
+                        download_url,
+                        resp.status_code,
+                        dict(resp.headers),
                     )
                     if resp.status_code == 200:
                         url_accessible = True
@@ -928,23 +1030,7 @@ def main() -> None:
                 sys.stderr.write(f"[Row {idx}] Late posting failed:\n{e}\n")
 
         # ---------- Flip Generate to FALSE ----------
-        try:
-            print(
-                f"[Row {idx}] Setting 'Generate' to FALSE in column {generate_col_index}..."
-            )
-            ws.update_cell(idx, generate_col_index, "FALSE")
-            # Verify the write
-            verify_value = ws.cell(idx, generate_col_index).value
-            if str(verify_value).upper() in ("FALSE", "0", ""):
-                print(f"[Row {idx}] ✓ 'Generate' successfully set to FALSE in sheet.")
-            else:
-                print(
-                    f"[Row {idx}] ⚠ WARNING: Generate write may have failed. Expected: FALSE, Got: {verify_value}"
-                )
-        except Exception as e:
-            error_msg = f"[Row {idx}] Failed to update 'Generate' cell:\n{e}\n"
-            sys.stderr.write(error_msg)
-            print(error_msg)  # Also print to stdout so it's visible
+        set_generate_state(ws, idx, generate_col_index, "FALSE")
 
     if not any_executed:
         print("No rows processed (Generate not set or files missing).")
