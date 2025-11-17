@@ -961,7 +961,7 @@ def main() -> None:
                 password=NC_PASS,
                 remote_path=remote_path,
             )
-            download_url = share_url.rstrip("/") + "/download"
+            download_url = share_url.rstrip("/")
             print(f"[Row {idx}] Share link: {share_url}")
             print(f"[Row {idx}] Download URL: {download_url}")
 
