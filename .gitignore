@@ -48,3 +48,10 @@ Temporary Items
 temp_videos
 
 service-key-laserrens-video.json
+gallardo-sheets-bot-3a8479c8d627.json
+.env
+.venv/
+venv/
+runPython.log
+__pycache__/
+.env

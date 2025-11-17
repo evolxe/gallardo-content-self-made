@@ -1,6 +1,9 @@
 import requests
 import sys
 
+from config import get_env
+
+
 def send_nextcloud_video_url_to_webhook(video_url, webhook_url):
     payload = {"video_url": video_url}
     try:
@@ -10,15 +13,14 @@ def send_nextcloud_video_url_to_webhook(video_url, webhook_url):
     except requests.exceptions.RequestException as e:
         return f"Error: {e}"
 
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python script.py <video_url>")
         sys.exit(1)
 
     video_url = sys.argv[1]
-    webhook_url = "https://hook.us1.make.com/va1z9eix6ymbw51x8quz1qgaifspuomn"
+    webhook_url = get_env("MAKE_WEBHOOK_URL")
 
     result = send_nextcloud_video_url_to_webhook(video_url, webhook_url)
     print(result)
-
-

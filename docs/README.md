@@ -23,12 +23,14 @@ Working with the SSH server:
 ```
 ssh -p 2223 office.binarika.com
 ssh -p 2223 videoeditor@office.binarika.com
-pw: R0cstudio
 ```
+
+> The server password is no longer stored in this repository. Retrieve it from your secure password manager or request access from an admin.
 
 The videos on nextCloud go to the `videoeditor/Videos` directory which is shared
 
+## Environment variables
 
-
+All sensitive values (Google Sheet URL, service account path, Nextcloud + Late credentials, webhook URLs, etc.) live in the root `.env` file. Copy `.env.example` to `.env` and populate the required values before running any scripts.
 
 

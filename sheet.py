@@ -4,24 +4,28 @@ import os
 import shlex
 import subprocess
 import time
+import re
 from typing import Any, Optional, List
 
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
 
+from config import BASE_DIR, get_env
 from validation import validate_nextcloud_url, normalize_nextcloud_url, is_nextcloud_url
 
 # ─────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────
 
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1yIZuIjtbQNVgQaY3OvDKDcpyQm90amiMSGHpfFwTTgI/edit?gid=0#gid=0"
-WORKSHEET_NAME = "VideoMergeData"
-SERVICE_ACCOUNT_FILE = "service-key-laserrens-video.json"
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+SCRIPT_DIR = str(BASE_DIR)
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SHEET_URL = get_env("SHEET_URL")
+WORKSHEET_NAME = os.environ.get("WORKSHEET_NAME", "VideoMergeData")
+SERVICE_ACCOUNT_FILE = get_env("SERVICE_ACCOUNT_FILE")
+if not os.path.isabs(SERVICE_ACCOUNT_FILE):
+    SERVICE_ACCOUNT_FILE = os.path.join(SCRIPT_DIR, SERVICE_ACCOUNT_FILE)
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
 def get_temp_dir() -> str:
@@ -71,10 +75,10 @@ RENDER_FIT = "crop"  # or "pad"
 _font_pct_env = os.environ.get("GALLARDO_FONT_SIZE_PERCENT")
 try:
     FONT_SIZE_PERCENT = (
-        float(_font_pct_env) if _font_pct_env else 0.06334
+        float(_font_pct_env) if _font_pct_env else 0.08334
     )  # default ≈8.33% = 90px for 1080p (original size)
 except Exception:
-    FONT_SIZE_PERCENT = 0.06334
+    FONT_SIZE_PERCENT = 0.08334
 # Clamp sane bounds 0.05..0.3
 if FONT_SIZE_PERCENT < 0.05:
     FONT_SIZE_PERCENT = 0.05
@@ -91,10 +95,12 @@ BROWSER_HEADERS = {
 }
 
 # Nextcloud auth for WebDAV + OCS
-NC_BASE = "https://cloud.targethouse.dk"
-NC_USER = "videoeditor"
-NC_PASS = "4b@XxvxaqI717wO1"
-NC_REMOTE_DIR = "Videos"  # remote folder for uploads, e.g. "Videos"
+NC_BASE = get_env("NC_BASE")
+NC_USER = get_env("NC_USER")
+NC_PASS = get_env("NC_PASS")
+NC_REMOTE_DIR = os.environ.get(
+    "NC_REMOTE_DIR", "Videos"
+)  # remote folder for uploads, e.g. "Videos"
 
 
 # ─────────────────────────────────────────────────────────
@@ -108,12 +114,112 @@ def truthy_generate(value: Any) -> bool:
     if value is None:
         return False
 
-    s = str(value).strip().lower()
+    s = _coerce_cell_value(value).strip().lower()
     return s in {"true", "yes", "y", "1", "on"}
 
 
 def is_url(s: str) -> bool:
     return isinstance(s, str) and (s.startswith("http://") or s.startswith("https://"))
+
+
+VALID_LOCATIONS = {
+    "top",
+    "top-left",
+    "top-right",
+    "center",
+    "center-left",
+    "center-right",
+    "bottom",
+    "bottom-left",
+    "bottom-right",
+}
+
+
+def _coerce_cell_value(value: Any) -> str:
+    """
+    Normalize values coming from dropdowns or objects (dicts) to a plain string.
+    """
+    if isinstance(value, dict):
+        # Common keys returned by Sheets API or data validation objects
+        for key in ("value", "effectiveValue", "userEnteredValue"):
+            if key in value:
+                inner = value[key]
+                if isinstance(inner, dict):
+                    for inner_key in ("stringValue", "effectiveValue"):
+                        if inner_key in inner:
+                            inner_val = inner[inner_key]
+                            if isinstance(inner_val, str):
+                                return inner_val
+                    continue
+                if inner is not None:
+                    return str(inner)
+    return "" if value is None else str(value)
+
+
+def normalize_location(raw_value: Any, *, default: str) -> str:
+    """
+    Accept user-friendly dropdown labels (e.g., 'Top Center') and convert them
+    to the canonical merge.py values (e.g., 'top').
+    """
+    value = _coerce_cell_value(raw_value).strip()
+    if not value:
+        return default
+
+    original_value = value
+    value = value.lower()
+    # Replace underscores and multiple spaces with hyphens for consistent parsing
+    value = value.replace("_", "-")
+    value = re.sub(r"\s+", "-", value)
+
+    # Direct match
+    if value in VALID_LOCATIONS:
+        return value
+
+    synonyms = {
+        "top-center": "top",
+        "top-middle": "top",
+        "bottom-center": "bottom",
+        "bottom-middle": "bottom",
+        "middle": "center",
+        "middle-center": "center",
+        "center-center": "center",
+        "middle-left": "center-left",
+        "middle-right": "center-right",
+        "center-middle": "center",
+    }
+    if value in synonyms:
+        normalized = synonyms[value]
+    else:
+        parts = value.split("-")
+        parts = [p for p in parts if p]
+        normalized = None
+
+        if len(parts) == 2:
+            left = parts[0]
+            right = parts[1]
+
+            if right == "center" and left in {"top", "bottom"}:
+                normalized = left
+            else:
+                left = "center" if left == "middle" else left
+                right = "center" if right == "middle" else right
+                candidate = f"{left}-{right}"
+                if candidate in VALID_LOCATIONS:
+                    normalized = candidate
+        elif len(parts) == 1 and parts[0] == "center":
+            normalized = "center"
+
+    if normalized and normalized in VALID_LOCATIONS:
+        if normalized != original_value.lower():
+            print(f"[Location] Normalized '{original_value}' → '{normalized}'")
+        return normalized
+
+    if original_value:
+        print(
+            f"[Location] Warning: '{original_value}' not recognized. "
+            f"Defaulting to '{default}'."
+        )
+    return default
 
 
 def download_nextcloud_public_file(url: str) -> Optional[str]:
@@ -452,12 +558,14 @@ def main() -> None:
         text2 = str(row.get("Video Text 2", "")).strip()
         text3 = str(row.get("Video Text 3", "")).strip()
 
-        text1_loc = str(row.get("Text 1 Location", "")).strip() or "bottom"
-        text2_loc = str(row.get("Text 2 Location", "")).strip() or "bottom"
-        text3_loc = str(row.get("Text 3 Location", "")).strip() or "bottom"
+        text1_loc = normalize_location(row.get("Text 1 Location", ""), default="bottom")
+        text2_loc = normalize_location(row.get("Text 2 Location", ""), default="bottom")
+        text3_loc = normalize_location(row.get("Text 3 Location", ""), default="bottom")
 
         overlay_elem_1 = str(row.get("Overlay Element 1", "")).strip()
-        overlay_loc_1 = str(row.get("Overlay 1 Location", "")).strip() or "top-right"
+        overlay_loc_1 = normalize_location(
+            row.get("Overlay 1 Location", ""), default="top-right"
+        )
 
         if not video2_val or not intro_val or not exit_val:
             sys.stderr.write(

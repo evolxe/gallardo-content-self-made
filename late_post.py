@@ -9,18 +9,24 @@ Usage:
 
 import argparse
 import json
+import os
 from urllib.parse import urlparse, urlunparse
+
 import requests
+
+from config import get_env
 
 # ------------------------------------------------------------
 # Late API Credentials
 # ------------------------------------------------------------
-LATE_API_KEY = "sk_bd6dd48a14e418efb906c22047681e231bb3a7b1af27b1a4abb49880ccd65c54"
+LATE_API_KEY = get_env("LATE_API_KEY")
 
-# IMPORTANT: Set your Late Profile ID here:
-LATE_PROFILE_ID = "6919808587fd7ed7d58952fc"
+# IMPORTANT: Set your Late Profile ID in the environment:
+LATE_PROFILE_ID = get_env("LATE_PROFILE_ID")
 
-LATE_POST_ENDPOINT = "https://getlate.dev/api/v1/posts"
+LATE_POST_ENDPOINT = os.environ.get(
+    "LATE_POST_ENDPOINT", "https://getlate.dev/api/v1/posts"
+)
 
 
 def build_nextcloud_download_url(share_url: str) -> str:
