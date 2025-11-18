@@ -18,24 +18,18 @@ LOG_DIR="$SCRIPT_DIR/logs"
 mkdir -p "$LOG_DIR"
 
 TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
-RUN_LOG="$LOG_DIR/run_$TIMESTAMP.log"
 ERR_LOG="$LOG_DIR/error_$TIMESTAMP.log"
 
-# Only create run log file (error log will be created by Python if an error occurs)
-touch "$RUN_LOG"
-
-# Tee stdout/stderr to run log only (error log created on-demand by Python)
-exec > >(tee -a "$RUN_LOG") 2> >(tee -a "$RUN_LOG" >&2)
+# No log files created during normal operation - Python buffers everything in memory
+# Error log will be created by Python only if an error occurs
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
 log "Starting runPython.sh"
-log "Run log: $RUN_LOG"
 log "Error log: $ERR_LOG (will be created only if an error occurs)"
 
-export GALLARDO_RUN_LOG="$RUN_LOG"
 export GALLARDO_ERR_LOG="$ERR_LOG"
 
 # Configure default font size percent for video text (can be overridden in env)

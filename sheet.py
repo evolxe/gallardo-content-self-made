@@ -789,7 +789,7 @@ def main() -> None:
                     error_col_index,
                     f"Schedule DateTime '{schedule_raw}' is invalid. Use YYYY-MM-DD HH:MM:SS or M/D/YYYY HH:MM:SS.",
                 )
-                set_generate_state(ws, idx, generate_col_index, "TRUE")
+                set_generate_state(ws, idx, generate_col_index, "ERROR")
                 continue
         logger.info("[Row %s] Normalized schedule datetime: %s", idx, schedule_value)
         post_text_payload = (
@@ -801,6 +801,7 @@ def main() -> None:
             message = "Missing required video references. Intro, Video File Name, and Exit values must be provided."
             sys.stderr.write(f"[Row {idx}] {message}\n")
             record_error(logger, ws, idx, error_col_index, message)
+            set_generate_state(ws, idx, generate_col_index, "ERROR")
             continue
 
         intro_path = resolve_path(intro_val)
@@ -830,6 +831,7 @@ def main() -> None:
             )
             sys.stderr.write(f"[Row {idx}] {message}\n")
             record_error(logger, ws, idx, error_col_index, message)
+            set_generate_state(ws, idx, generate_col_index, "ERROR")
             continue
 
         set_generate_state(ws, idx, generate_col_index, "LOADING")
@@ -918,7 +920,7 @@ def main() -> None:
                 "Video rendering failed. Please review merge.py logs.",
                 exception=e,
             )
-            set_generate_state(ws, idx, generate_col_index, "TRUE")
+            set_generate_state(ws, idx, generate_col_index, "ERROR")
             continue
 
         # ---------- Upload via WebDAV ----------
@@ -949,7 +951,7 @@ def main() -> None:
                 "Upload to Nextcloud failed. Please verify storage space and credentials.",
                 exception=e,
             )
-            set_generate_state(ws, idx, generate_col_index, "TRUE")
+            set_generate_state(ws, idx, generate_col_index, "ERROR")
             continue
 
         # ---------- Create share link and write Download URL ----------
@@ -1052,6 +1054,8 @@ def main() -> None:
                 "Could not create a Nextcloud share link. Please try again later.",
                 exception=e,
             )
+            # Set state to ERROR since share link creation failed
+            set_generate_state(ws, idx, generate_col_index, "ERROR")
 
         # ---------- Social posting via Late ----------
         if share_url:
