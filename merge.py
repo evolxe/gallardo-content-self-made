@@ -45,14 +45,18 @@ def _load_font(font_size):
 
     # Get the directory where this script is located
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    
+
     # First priority: Try to load custom font from fonts/ directory
     custom_font_paths = [
         os.path.join(script_dir, "fonts", "MinionPro-Regular.otf"),
-        os.path.join(os.path.dirname(script_dir), "fonts", "MinionPro-Regular.otf"),  # In case script is in subdirectory
-        os.path.join(os.getcwd(), "fonts", "MinionPro-Regular.otf"),  # Current working directory
+        os.path.join(
+            os.path.dirname(script_dir), "fonts", "MinionPro-Regular.otf"
+        ),  # In case script is in subdirectory
+        os.path.join(
+            os.getcwd(), "fonts", "MinionPro-Regular.otf"
+        ),  # Current working directory
     ]
-    
+
     for font_path in custom_font_paths:
         if os.path.exists(font_path):
             try:
@@ -326,6 +330,7 @@ def concatenate_videos(
     output_file,
     fade_duration=1.0,
     font_size=90,
+    text_color=(255, 255, 255),
     square_size=1080,
     fit="crop",
 ):
@@ -351,6 +356,8 @@ def concatenate_videos(
                 for idx, message in enumerate(texts):
                     start_t = idx * third
                     loc = text_locations[idx] if idx < len(text_locations) else "bottom"
+                    # Convert RGB tuple to RGBA tuple for PIL (add alpha channel)
+                    text_color_rgba = (text_color[0], text_color[1], text_color[2], 255)
                     overlay = (
                         _make_textbox_clip(
                             text=message,
@@ -359,7 +366,7 @@ def concatenate_videos(
                             location=loc,
                             font_size=font_size,
                             box_color=(50, 50, 50, 180),
-                            text_color=(255, 255, 255, 255),
+                            text_color=text_color_rgba,
                             padding=32,
                             radius=24,
                             max_width_frac=0.8,
@@ -435,6 +442,12 @@ def parse_args(argv):
     p.add_argument("--fade", type=float, default=1.0)
     p.add_argument("--fontsize", type=int, default=90)
     p.add_argument(
+        "--textcolor",
+        type=str,
+        default="#FFFFFF",
+        help="Text color as hex code (e.g., '#FFFFFF' for white, '#000000' for black)",
+    )
+    p.add_argument(
         "--size", type=int, default=1080, help="Square output size (e.g., 1080)"
     )
     p.add_argument(
@@ -451,6 +464,28 @@ if __name__ == "__main__":
     texts = [args.text1, args.text2, args.text3]
     text_locations = [args.text1_location, args.text2_location, args.text3_location]
 
+    # Parse text color from hex code (#RRGGBB)
+    try:
+        hex_color = args.textcolor.strip().upper()
+        # Validate format
+        if not hex_color.startswith("#"):
+            raise ValueError("Text color must start with '#'")
+        if len(hex_color) != 7:
+            raise ValueError(
+                "Text color must be 6 hex digits after '#' (e.g., #FFFFFF)"
+            )
+        # Convert hex to RGB
+        hex_part = hex_color[1:]
+        r = int(hex_part[0:2], 16)
+        g = int(hex_part[2:4], 16)
+        b = int(hex_part[4:6], 16)
+        text_color = (r, g, b)
+        print(f"[Text Color] Using {hex_color} -> RGB{text_color}")
+    except (ValueError, AttributeError) as e:
+        print(f"[Text Color] ⚠ WARNING: Invalid text color '{args.textcolor}': {e}")
+        print("[Text Color] ⚠ Falling back to default white #FFFFFF")
+        text_color = (255, 255, 255)
+
     concatenate_videos(
         args.video1,
         args.video2,
@@ -462,6 +497,7 @@ if __name__ == "__main__":
         output_file=args.output,
         fade_duration=args.fade,
         font_size=args.fontsize,
+        text_color=text_color,
         square_size=args.size,
         fit=args.fit,
     )

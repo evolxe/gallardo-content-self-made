@@ -24,7 +24,13 @@ from log_utils import (
     write_sheet_value,
 )
 from late_post import post_video_to_all_accounts
-from validation import validate_nextcloud_url, normalize_nextcloud_url, is_nextcloud_url
+from validation import (
+    validate_nextcloud_url,
+    normalize_nextcloud_url,
+    is_nextcloud_url,
+    validate_text_color,
+    validate_text_size,
+)
 
 attach_log_streams("sheet")
 logger = get_logger("gallardo.sheet")
@@ -729,8 +735,10 @@ def main() -> None:
         overlay_elem_1 = str(row.get("Overlay Element 1", "")).strip()
         schedule_raw = str(row.get("Schedule DateTime", "")).strip()
         post_text_custom = str(row.get("Post Text", "")).strip()
+        text_size_raw = str(row.get("Text Size", "")).strip()
+        text_color_raw = str(row.get("Text Color", "")).strip()
         logger.info(
-            "[Row %s] Values video2=%s intro=%s exit=%s overlay=%s schedule=%s post_text=%s",
+            "[Row %s] Values video2=%s intro=%s exit=%s overlay=%s schedule=%s post_text=%s text_size=%s text_color=%s",
             idx,
             video2_val,
             intro_val,
@@ -738,6 +746,8 @@ def main() -> None:
             overlay_elem_1,
             schedule_raw,
             post_text_custom,
+            text_size_raw,
+            text_color_raw,
         )
 
         # Validate Nextcloud URLs and provide helpful error messages
@@ -778,6 +788,52 @@ def main() -> None:
         overlay_loc_1 = normalize_location(
             row.get("Overlay 1 Location", ""), default="top-right"
         )
+
+        # Validate Text Size
+        text_size = None
+        if text_size_raw:
+            is_valid, error_msg, size_int = validate_text_size(text_size_raw)
+            if not is_valid:
+                record_error(
+                    logger,
+                    ws,
+                    idx,
+                    error_col_index,
+                    f"Text Size validation failed: {error_msg}",
+                )
+                set_generate_state(ws, idx, generate_col_index, "ERROR")
+                continue
+            text_size = size_int
+            logger.info("[Row %s] Using custom Text Size: %d pixels", idx, text_size)
+        else:
+            text_size = FONT_SIZE  # Use default from config
+            logger.info("[Row %s] Using default Text Size: %d pixels", idx, text_size)
+
+        # Validate Text Color (keep as hex code)
+        text_color_hex = None
+        if text_color_raw:
+            is_valid, error_msg, rgb_tuple = validate_text_color(text_color_raw)
+            if not is_valid:
+                record_error(
+                    logger,
+                    ws,
+                    idx,
+                    error_col_index,
+                    f"Text Color validation failed: {error_msg}",
+                )
+                set_generate_state(ws, idx, generate_col_index, "ERROR")
+                continue
+            # Keep the hex code as-is (validation ensures it's valid)
+            text_color_hex = text_color_raw.upper()  # Normalize to uppercase
+            logger.info(
+                "[Row %s] Using custom Text Color: %s",
+                idx,
+                text_color_hex,
+            )
+        else:
+            text_color_hex = "#FFFFFF"  # Default white
+            logger.info("[Row %s] Using default Text Color: #FFFFFF", idx)
+
         schedule_value = None
         if schedule_raw:
             schedule_value = parse_schedule_datetime(schedule_raw, idx)
@@ -888,13 +944,15 @@ def main() -> None:
             "--fit",
             RENDER_FIT,
             "--fontsize",
-            str(FONT_SIZE),
+            str(text_size),
+            "--textcolor",
+            text_color_hex,
         ]
         display_cmd = " ".join(quote_for_display(a) for a in cmd_parts)
         print(f"Executing: {display_cmd}")
         print(f"[Row {idx}] Output will be saved to: {output_file}")
         print(
-            f"[Row {idx}] Using font size: {FONT_SIZE}px ({FONT_SIZE_PERCENT*100:.1f}% of {RENDER_SIZE}x{RENDER_SIZE} video)"
+            f"[Row {idx}] Using font size: {text_size}px, text color: {text_color_hex}"
         )
 
         try:

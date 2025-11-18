@@ -202,3 +202,91 @@ def extract_share_id(url: str) -> Optional[str]:
     
     return None
 
+
+def validate_text_color(color: str) -> Tuple[bool, Optional[str], Optional[Tuple[int, int, int]]]:
+    """
+    Validate text color format and convert to RGB tuple.
+    
+    Expected format: #RRGGBB (6-digit hex code with # prefix)
+    Examples: #FFFFFF, #000000, #FF0000, #00FF00, #0000FF
+    
+    Args:
+        color: The color string to validate (e.g., "#FFFFFF")
+        
+    Returns:
+        Tuple of (is_valid, error_message, rgb_tuple)
+        - is_valid: True if color is valid, False otherwise
+        - error_message: None if valid, error description if invalid
+        - rgb_tuple: (R, G, B) tuple if valid, None if invalid
+    """
+    if not color or not isinstance(color, str):
+        return False, "Text Color is required and must be a string", None
+    
+    color = color.strip()
+    
+    # Empty string is OK (will use default)
+    if not color:
+        return True, None, None
+    
+    # Must start with #
+    if not color.startswith("#"):
+        return False, "Text Color must start with '#' (e.g., #FFFFFF)", None
+    
+    # Must be exactly 7 characters (# + 6 hex digits)
+    if len(color) != 7:
+        return False, "Text Color must be 6 hex digits after '#' (e.g., #FFFFFF, not #FFF)", None
+    
+    # Check that remaining 6 characters are valid hex digits
+    hex_part = color[1:]
+    try:
+        # Convert hex to integer to validate
+        rgb_int = int(hex_part, 16)
+        # Convert to RGB tuple
+        r = int(hex_part[0:2], 16)
+        g = int(hex_part[2:4], 16)
+        b = int(hex_part[4:6], 16)
+        return True, None, (r, g, b)
+    except ValueError:
+        return False, f"Text Color contains invalid hex digits: '{hex_part}'. Use format #RRGGBB (e.g., #FFFFFF)", None
+
+
+def validate_text_size(size: str) -> Tuple[bool, Optional[str], Optional[int]]:
+    """
+    Validate text size format and convert to integer pixels.
+    
+    Expected format: Integer pixels (e.g., "90", "120", "72")
+    Valid range: 12-300 pixels (reasonable bounds for video text)
+    
+    Args:
+        size: The text size string to validate (e.g., "90")
+        
+    Returns:
+        Tuple of (is_valid, error_message, size_int)
+        - is_valid: True if size is valid, False otherwise
+        - error_message: None if valid, error description if invalid
+        - size_int: Integer pixel size if valid, None if invalid
+    """
+    if not size or not isinstance(size, str):
+        return True, None, None  # Empty is OK, will use default
+    
+    size = size.strip()
+    
+    # Empty string is OK (will use default)
+    if not size:
+        return True, None, None
+    
+    # Must be a valid integer
+    try:
+        size_int = int(size)
+    except ValueError:
+        return False, f"Text Size must be an integer (e.g., '90', '120'). Got: '{size}'", None
+    
+    # Validate reasonable bounds (12-300 pixels)
+    if size_int < 12:
+        return False, f"Text Size must be at least 12 pixels. Got: {size_int}", None
+    
+    if size_int > 300:
+        return False, f"Text Size must be at most 300 pixels. Got: {size_int}", None
+    
+    return True, None, size_int
+
