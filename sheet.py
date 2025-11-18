@@ -17,6 +17,7 @@ from google.oauth2.service_account import Credentials
 from config import BASE_DIR, get_env
 from log_utils import (
     attach_log_streams,
+    flush_error_log,
     get_logger,
     log_call,
     record_error,
@@ -1026,13 +1027,17 @@ def main() -> None:
                     print(f"[Row {idx}] ✓ Download URL successfully written to sheet.")
                 else:
                     print(
-                        f"[Row {idx}] ⚠ WARNING: Download URL write may have failed. Expected: {download_url}, Got: {verify_value}"
+                        f"[Row {idx}] ⚠ WARNING: Download URL write verification failed. Expected: {download_url}, Got: {verify_value}"
                     )
+                # Set state to DONE after URL upload to sheet (even if verification failed, the write was attempted)
+                set_generate_state(ws, idx, generate_col_index, "DONE")
             else:
                 print(
                     f"[Row {idx}] Note: 'Download URL' column not found; "
                     f"share link not written back to sheet."
                 )
+                # Even if column not found, we created the share link, so mark as DONE
+                set_generate_state(ws, idx, generate_col_index, "DONE")
         except Exception as e:
             error_msg = f"[Row {idx}] Failed to create/write share link for {remote_path}:\n{e}\n"
             sys.stderr.write(error_msg)
@@ -1063,6 +1068,8 @@ def main() -> None:
                     timezone=LATE_TIMEZONE,
                 )
                 print(f"[Row {idx}] Late post created successfully: {late_response}")
+                # Set state to POSTED after successful social media post
+                set_generate_state(ws, idx, generate_col_index, "POSTED")
             except Exception as e:
                 sys.stderr.write(f"[Row {idx}] Late posting failed:\n{e}\n")
                 record_error(
@@ -1073,13 +1080,17 @@ def main() -> None:
                     "Late social posting failed. Please review Late API credentials/logs.",
                     exception=e,
                 )
-
-        # ---------- Flip Generate to FALSE ----------
-        set_generate_state(ws, idx, generate_col_index, "FALSE")
+                # If posting fails but URL was uploaded, state remains DONE (already set above)
 
     if not any_executed:
         print("No rows processed (Generate not set or files missing).")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        # Flush all buffered logs to error log file
+        flush_error_log(e)
+        # Re-raise to maintain exit code behavior
+        raise

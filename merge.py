@@ -36,13 +36,35 @@ def _rounded_box_rgba(width, height, radius=24, rgba=(50, 50, 50, 180)):
 
 def _load_font(font_size):
     """
-    Simplified font loading: Try common system font names that work across platforms.
-    PIL can automatically resolve these font names on most systems.
+    Load font with priority:
+    1. Custom MinionPro-Regular.otf from fonts/ directory (relative to script)
+    2. Common system font names
+    3. Default bitmap font (fallback)
     """
     font_size = int(font_size)
 
-    # Try common font names that work across platforms
-    # PIL will use system font resolution if available
+    # Get the directory where this script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # First priority: Try to load custom font from fonts/ directory
+    custom_font_paths = [
+        os.path.join(script_dir, "fonts", "MinionPro-Regular.otf"),
+        os.path.join(os.path.dirname(script_dir), "fonts", "MinionPro-Regular.otf"),  # In case script is in subdirectory
+        os.path.join(os.getcwd(), "fonts", "MinionPro-Regular.otf"),  # Current working directory
+    ]
+    
+    for font_path in custom_font_paths:
+        if os.path.exists(font_path):
+            try:
+                font = ImageFont.truetype(font_path, font_size)
+                print(f"[Font] ✓ Loaded custom font: {font_path} at {font_size}px")
+                return font
+            except (OSError, IOError) as e:
+                print(f"[Font] ⚠ Failed to load custom font from {font_path}: {e}")
+                continue
+
+    # Second priority: Try common system font names that work across platforms
+    # PIL can automatically resolve these font names on most systems
     font_names = ["Arial", "Helvetica", "DejaVu Sans", "Liberation Sans", "Verdana"]
 
     for name in font_names:

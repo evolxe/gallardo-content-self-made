@@ -21,17 +21,19 @@ TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
 RUN_LOG="$LOG_DIR/run_$TIMESTAMP.log"
 ERR_LOG="$LOG_DIR/error_$TIMESTAMP.log"
 
-touch "$RUN_LOG" "$ERR_LOG"
+# Only create run log file (error log will be created by Python if an error occurs)
+touch "$RUN_LOG"
 
-exec > >(tee -a "$RUN_LOG") 2> >(tee -a "$ERR_LOG" >&2)
+# Tee stdout/stderr to run log only (error log created on-demand by Python)
+exec > >(tee -a "$RUN_LOG") 2> >(tee -a "$RUN_LOG" >&2)
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
 log "Starting runPython.sh"
-log "Stdout log: $RUN_LOG"
-log "Stderr log: $ERR_LOG"
+log "Run log: $RUN_LOG"
+log "Error log: $ERR_LOG (will be created only if an error occurs)"
 
 export GALLARDO_RUN_LOG="$RUN_LOG"
 export GALLARDO_ERR_LOG="$ERR_LOG"
