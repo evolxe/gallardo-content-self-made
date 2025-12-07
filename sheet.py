@@ -24,6 +24,7 @@ from log_utils import (
     write_sheet_value,
 )
 from late_post import post_video_to_all_accounts
+from chatgpt_integration import send_categories_to_chatgpt
 from validation import (
     validate_nextcloud_url,
     normalize_nextcloud_url,
@@ -737,8 +738,10 @@ def main() -> None:
         post_text_custom = str(row.get("Post Text", "")).strip()
         text_size_raw = str(row.get("Text Size", "")).strip()
         text_color_raw = str(row.get("Text Color", "")).strip()
+        category_val = str(row.get("Categories", "")).strip()
+        subcategory_val = str(row.get("subcategories", "")).strip()
         logger.info(
-            "[Row %s] Values video2=%s intro=%s exit=%s overlay=%s schedule=%s post_text=%s text_size=%s text_color=%s",
+            "[Row %s] Values video2=%s intro=%s exit=%s overlay=%s schedule=%s post_text=%s text_size=%s text_color=%s category=%s subcategory=%s",
             idx,
             video2_val,
             intro_val,
@@ -748,6 +751,8 @@ def main() -> None:
             post_text_custom,
             text_size_raw,
             text_color_raw,
+            category_val,
+            subcategory_val,
         )
 
         # Validate Nextcloud URLs and provide helpful error messages
@@ -1143,6 +1148,50 @@ def main() -> None:
                     exception=e,
                 )
                 # If posting fails but URL was uploaded, state remains DONE (already set above)
+
+        # ---------- Send Categories and subcategories to ChatGPT ----------
+        try:
+            if category_val or subcategory_val:
+                # Include additional context like post text and video info if available
+                additional_context = None
+                if post_text_payload:
+                    additional_context = f"Post Text: {post_text_payload}"
+                if download_url:
+                    additional_context = (
+                        (additional_context or "") + f"\nVideo URL: {download_url}"
+                    )
+                
+                print(
+                    f"[Row {idx}] Sending Categories and subcategories to ChatGPT: "
+                    f"category='{category_val}', subcategory='{subcategory_val}'"
+                )
+                chatgpt_response = send_categories_to_chatgpt(
+                    category=category_val,
+                    subcategory=subcategory_val,
+                    additional_context=additional_context,
+                )
+                if chatgpt_response:
+                    print(f"[Row {idx}] ChatGPT response received successfully")
+                    logger.info(
+                        "[Row %s] ChatGPT response: %s", idx, chatgpt_response
+                    )
+                else:
+                    print(
+                        f"[Row {idx}] Warning: ChatGPT integration not configured or failed"
+                    )
+            else:
+                logger.info(
+                    "[Row %s] Skipping ChatGPT: both Categories and subcategories are empty",
+                    idx,
+                )
+        except Exception as e:
+            sys.stderr.write(
+                f"[Row {idx}] Warning: Failed to send categories to ChatGPT:\n{e}\n"
+            )
+            logger.warning(
+                "[Row %s] ChatGPT integration error (non-fatal): %s", idx, e
+            )
+            # Don't fail the entire workflow if ChatGPT fails
 
     if not any_executed:
         print("No rows processed (Generate not set or files missing).")

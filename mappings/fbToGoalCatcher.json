@@ -1,0 +1,32 @@
+{
+  "field_mappings": {
+    "email": "email",
+    "first_name": "first_name",
+    "last_name": "last_name",
+    "phone": "phone",
+    "full_name": "first_name",
+    "facebook_lead_id": "source_id",
+    "created_time": "source_created_time"
+  },
+  "required_fields": [
+    "email"
+  ],
+  "optional_fields": [
+    "first_name",
+    "last_name",
+    "phone"
+  ],
+  "default_tags": [
+    123
+  ],
+  "_comment_tags": "Tag IDs (integers) from Groundhogg. Use tag names in comments for reference, but IDs in the array."
+  "default_funnel_id": null,
+  "custom_field_mappings": {
+    "company": "company",
+    "job_title": "job_title",
+    "website": "website",
+    "message": "notes",
+    "comments": "notes"
+  }
+}
+
