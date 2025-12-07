@@ -24,7 +24,7 @@ from log_utils import (
     write_sheet_value,
 )
 from late_post import post_video_to_all_accounts
-from chatgpt_integration import send_categories_to_chatgpt
+from chatgpt_integration import createVideoFromCategory
 from validation import (
     validate_nextcloud_url,
     normalize_nextcloud_url,
@@ -43,7 +43,7 @@ logger = get_logger("gallardo.sheet")
 SCRIPT_DIR = str(BASE_DIR)
 
 SHEET_URL = get_env("SHEET_URL")
-WORKSHEET_NAME = os.environ.get("WORKSHEET_NAME", "VideoMergeData")
+WORKSHEET_NAME = os.environ.get("WORKSHEET_NAME", "Copy of VideoMergeData (dev)")
 SERVICE_ACCOUNT_FILE = get_env("SERVICE_ACCOUNT_FILE")
 if not os.path.isabs(SERVICE_ACCOUNT_FILE):
     SERVICE_ACCOUNT_FILE = os.path.join(SCRIPT_DIR, SERVICE_ACCOUNT_FILE)
@@ -738,8 +738,8 @@ def main() -> None:
         post_text_custom = str(row.get("Post Text", "")).strip()
         text_size_raw = str(row.get("Text Size", "")).strip()
         text_color_raw = str(row.get("Text Color", "")).strip()
-        category_val = str(row.get("Categories", "")).strip()
-        subcategory_val = str(row.get("subcategories", "")).strip()
+        category_val = str(row.get("Category", "")).strip()
+        subcategory_val = str(row.get("SubCategory", "")).strip()
         logger.info(
             "[Row %s] Values video2=%s intro=%s exit=%s overlay=%s schedule=%s post_text=%s text_size=%s text_color=%s category=%s subcategory=%s",
             idx,
@@ -786,9 +786,71 @@ def main() -> None:
             text3,
         )
 
+        # Initialize text locations from sheet (will be overridden by ChatGPT if it generates them)
         text1_loc = normalize_location(row.get("Text 1 Location", ""), default="bottom")
         text2_loc = normalize_location(row.get("Text 2 Location", ""), default="bottom")
         text3_loc = normalize_location(row.get("Text 3 Location", ""), default="bottom")
+
+        # ---------- Generate text overlays from ChatGPT if category/subcategory provided and texts are empty ----------
+        print(f"")
+        print("category_val: ", category_val)
+        print("subcategory_val: ", subcategory_val)
+        print("text1: ", text1)
+        print("text2: ", text2)
+        print("text3: ", text3)
+        print("--------------------------------")
+        if (category_val or subcategory_val) and not (text1 or text2 or text3):
+            try:
+                print(
+                    f"[Row {idx}] Generating text overlays from ChatGPT: "
+                    f"category='{category_val}', subcategory='{subcategory_val}'"
+                )
+                # Use post_text_custom as additional context if available (only the original post text, not generated texts)
+                additional_context = post_text_custom if post_text_custom else None
+                
+                chatgpt_result = createVideoFromCategory(
+                    category=category_val,
+                    subcategory=subcategory_val,
+                    additional_context=additional_context,
+                )
+                
+                if chatgpt_result and "texts" in chatgpt_result and "text_locations" in chatgpt_result:
+                    generated_texts = chatgpt_result["texts"]
+                    generated_locations = chatgpt_result["text_locations"]
+                    
+                    # Populate text fields with generated content (up to 3 texts)
+                    if len(generated_texts) > 0:
+                        text1 = generated_texts[0]
+                        if len(generated_locations) > 0:
+                            text1_loc = normalize_location(generated_locations[0], default="bottom")
+                    if len(generated_texts) > 1:
+                        text2 = generated_texts[1]
+                        if len(generated_locations) > 1:
+                            text2_loc = normalize_location(generated_locations[1], default="bottom")
+                    if len(generated_texts) > 2:
+                        text3 = generated_texts[2]
+                        if len(generated_locations) > 2:
+                            text3_loc = normalize_location(generated_locations[2], default="bottom")
+                    
+                    print(
+                        f"[Row {idx}] ✓ ChatGPT generated {len(generated_texts)} text overlay(s): "
+                        f"text1='{text1[:50] if text1 else ''}', text2='{text2[:50] if text2 else ''}', text3='{text3[:50] if text3 else ''}'"
+                    )
+                    logger.info(
+                        "[Row %s] ChatGPT generated texts: %s", idx, generated_texts
+                    )
+                else:
+                    print(
+                        f"[Row {idx}] Warning: ChatGPT did not return valid text overlays. Using empty texts."
+                    )
+            except Exception as e:
+                sys.stderr.write(
+                    f"[Row {idx}] Warning: Failed to generate text overlays from ChatGPT:\n{e}\n"
+                )
+                logger.warning(
+                    "[Row %s] ChatGPT integration error (non-fatal): %s", idx, e
+                )
+                # Continue with empty texts if ChatGPT fails
 
         overlay_loc_1 = normalize_location(
             row.get("Overlay 1 Location", ""), default="top-right"
@@ -1148,50 +1210,6 @@ def main() -> None:
                     exception=e,
                 )
                 # If posting fails but URL was uploaded, state remains DONE (already set above)
-
-        # ---------- Send Categories and subcategories to ChatGPT ----------
-        try:
-            if category_val or subcategory_val:
-                # Include additional context like post text and video info if available
-                additional_context = None
-                if post_text_payload:
-                    additional_context = f"Post Text: {post_text_payload}"
-                if download_url:
-                    additional_context = (
-                        (additional_context or "") + f"\nVideo URL: {download_url}"
-                    )
-                
-                print(
-                    f"[Row {idx}] Sending Categories and subcategories to ChatGPT: "
-                    f"category='{category_val}', subcategory='{subcategory_val}'"
-                )
-                chatgpt_response = send_categories_to_chatgpt(
-                    category=category_val,
-                    subcategory=subcategory_val,
-                    additional_context=additional_context,
-                )
-                if chatgpt_response:
-                    print(f"[Row {idx}] ChatGPT response received successfully")
-                    logger.info(
-                        "[Row %s] ChatGPT response: %s", idx, chatgpt_response
-                    )
-                else:
-                    print(
-                        f"[Row {idx}] Warning: ChatGPT integration not configured or failed"
-                    )
-            else:
-                logger.info(
-                    "[Row %s] Skipping ChatGPT: both Categories and subcategories are empty",
-                    idx,
-                )
-        except Exception as e:
-            sys.stderr.write(
-                f"[Row {idx}] Warning: Failed to send categories to ChatGPT:\n{e}\n"
-            )
-            logger.warning(
-                "[Row %s] ChatGPT integration error (non-fatal): %s", idx, e
-            )
-            # Don't fail the entire workflow if ChatGPT fails
 
     if not any_executed:
         print("No rows processed (Generate not set or files missing).")

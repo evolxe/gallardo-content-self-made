@@ -9,12 +9,12 @@ Usage:
     from chatgpt_integration import GPT
     
     gpt = GPT()
-    script = await gpt.generateScript("Technology", "AI")
+    script = gpt.generateScript("Technology", "AI")
     formatted = gpt.formatForVideo(script)
     
     # Or use the routing function:
     from chatgpt_integration import createVideoFromCategory
-    result = await createVideoFromCategory("Technology", "AI")
+    result = createVideoFromCategory("Technology", "AI")
 """
 
 import os
@@ -82,7 +82,7 @@ class GPT:
         Returns:
             Complete prompt string
         """
-        prompt = f"""You are a professional video script generator. Generate a 3 text overlay captions for our video based on the following information:
+        prompt = f"""You are a professional video script generator. Generate a video script based on the following information:
 
 CATEGORY: {category or 'N/A'}
 SUBCATEGORY: {subcategory or 'N/A'}
@@ -96,7 +96,7 @@ STYLE RULES:
 - Keep the script engaging and concise
 - Use clear, conversational language
 - Each text segment should be short enough to display on screen (max 50 words per segment)
-- Create 3 text overlays that complement the video content
+- Create 1-3 text overlays that complement the video content
 - Make the text attention-grabbing and relevant to the category/subcategory
 
 OUTPUT STRUCTURE (JSON format):
@@ -391,6 +391,65 @@ IMPORTANT: Return ONLY the JSON object, no additional text or explanation before
                 return False, f"Text at index {i} is too long ({len(text)} chars, max 500)"
         
         return True, None
+    
+    def _call_api(self, prompt: str, max_tokens: int = 500, temperature: float = 0.7) -> Optional[str]:
+        """
+        Generic API call method for custom prompts.
+        
+        Args:
+            prompt: The prompt to send to GPT
+            max_tokens: Maximum tokens in response
+            temperature: Temperature for generation (0.0-2.0)
+            
+        Returns:
+            Raw content string if successful, None otherwise
+        """
+        if not self.api_key:
+            logger.warning("[GPT] OPENAI_API_KEY not configured. Skipping GPT call.")
+            return None
+        
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            
+            api_payload = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    }
+                ],
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            
+            response = requests.post(
+                self.api_url,
+                json=api_payload,
+                headers=headers,
+                timeout=30,
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            if "choices" in result and result["choices"]:
+                choice = result["choices"][0]
+                message = choice.get("message", {})
+                content = message.get("content", "")
+                return content.strip() if content else None
+            
+            return None
+            
+        except requests.exceptions.RequestException as e:
+            logger.error("[GPT] API request failed: %s", e)
+            return None
+        except Exception as e:
+            logger.error("[GPT] Failed to call API: %s", e, exc_info=True)
+            return None
 
 
 # Global GPT instance
@@ -468,38 +527,3 @@ def send_categories_to_chatgpt(
     gpt = get_gpt_instance()
     return gpt.generateScript(category, subcategory, additional_context=additional_context)
 
-
-if __name__ == "__main__":
-    # Test function
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Test GPT integration")
-    parser.add_argument("--category", default="Technology", help="Category value")
-    parser.add_argument("--subcategory", default="AI", help="Subcategory value")
-    parser.add_argument("--context", default="", help="Additional context")
-    
-    args = parser.parse_args()
-    
-    print("Testing GPT Integration...")
-    print(f"Category: {args.category}")
-    print(f"Subcategory: {args.subcategory}")
-    if args.context:
-        print(f"Context: {args.context}")
-    print()
-    
-    result = createVideoFromCategory(
-        category=args.category,
-        subcategory=args.subcategory,
-        additional_context=args.context if args.context else None,
-    )
-    
-    if result:
-        print("✓ SUCCESS!")
-        print(f"Generated {len(result['texts'])} text overlay(s):")
-        for i, (text, location) in enumerate(
-            zip(result["texts"], result["text_locations"]), 1
-        ):
-            print(f"  {i}. [{location}] {text[:50]}...")
-    else:
-        print("✗ FAILED")
-        print("Check logs for details")
