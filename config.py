@@ -7,7 +7,9 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent
 
 # Load environment variables from the project root .env file if present.
+# Also try loading from 'env' file (without dot) for compatibility
 load_dotenv(BASE_DIR / ".env", override=False)
+load_dotenv(BASE_DIR / "env", override=False)
 
 
 def get_env(name: str, *, required: bool = True, default: Optional[str] = None) -> str:
