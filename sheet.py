@@ -6,6 +6,7 @@ import subprocess
 import time
 import re
 import mimetypes
+import json
 from datetime import datetime
 from urllib.parse import parse_qs, unquote, urlparse
 from typing import Any, Optional, List
@@ -25,6 +26,7 @@ from log_utils import (
 )
 from late_post import post_video_to_all_accounts
 from chatgpt_integration import createVideoFromCategory
+from text_layout import build_auto_overlay_package
 from validation import (
     validate_nextcloud_url,
     normalize_nextcloud_url,
@@ -720,6 +722,18 @@ def main() -> None:
 
     generate_col_index = headers.index("Generate") + 1
     error_col_index = headers.index("Error Message") + 1
+
+    # Column indexes for writing back generated text and properties
+    text1_col = headers.index("Video Text 1") + 1
+    text2_col = headers.index("Video Text 2") + 1
+    text3_col = headers.index("Video Text 3") + 1
+    text1_loc_col = headers.index("Text 1 Location") + 1
+    text2_loc_col = headers.index("Text 2 Location") + 1
+    text3_loc_col = headers.index("Text 3 Location") + 1
+    text_size_col = headers.index("Text Size") + 1 if "Text Size" in headers else None
+    text_color_col = (
+        headers.index("Text Color") + 1 if "Text Color" in headers else None
+    )
     print(f"[Info] 'Generate' column found at index {generate_col_index}")
 
     any_executed = False
@@ -799,6 +813,7 @@ def main() -> None:
         print("text2: ", text2)
         print("text3: ", text3)
         print("--------------------------------")
+        chatgpt_generated = False
         if (category_val or subcategory_val) and not (text1 or text2 or text3):
             try:
                 print(
@@ -807,31 +822,47 @@ def main() -> None:
                 )
                 # Use post_text_custom as additional context if available (only the original post text, not generated texts)
                 additional_context = post_text_custom if post_text_custom else None
-                
+
                 chatgpt_result = createVideoFromCategory(
                     category=category_val,
                     subcategory=subcategory_val,
                     additional_context=additional_context,
                 )
-                
-                if chatgpt_result and "texts" in chatgpt_result and "text_locations" in chatgpt_result:
+
+                if (
+                    chatgpt_result
+                    and "texts" in chatgpt_result
+                    and "text_locations" in chatgpt_result
+                ):
                     generated_texts = chatgpt_result["texts"]
                     generated_locations = chatgpt_result["text_locations"]
-                    
+                    logger.info(
+                        "[Row %s] GPT returned %s texts / %s locations",
+                        idx,
+                        len(generated_texts),
+                        len(generated_locations),
+                    )
+
                     # Populate text fields with generated content (up to 3 texts)
                     if len(generated_texts) > 0:
                         text1 = generated_texts[0]
                         if len(generated_locations) > 0:
-                            text1_loc = normalize_location(generated_locations[0], default="bottom")
+                            text1_loc = normalize_location(
+                                generated_locations[0], default="bottom"
+                            )
                     if len(generated_texts) > 1:
                         text2 = generated_texts[1]
                         if len(generated_locations) > 1:
-                            text2_loc = normalize_location(generated_locations[1], default="bottom")
+                            text2_loc = normalize_location(
+                                generated_locations[1], default="bottom"
+                            )
                     if len(generated_texts) > 2:
                         text3 = generated_texts[2]
                         if len(generated_locations) > 2:
-                            text3_loc = normalize_location(generated_locations[2], default="bottom")
-                    
+                            text3_loc = normalize_location(
+                                generated_locations[2], default="bottom"
+                            )
+
                     print(
                         f"[Row {idx}] ✓ ChatGPT generated {len(generated_texts)} text overlay(s): "
                         f"text1='{text1[:50] if text1 else ''}', text2='{text2[:50] if text2 else ''}', text3='{text3[:50] if text3 else ''}'"
@@ -839,6 +870,7 @@ def main() -> None:
                     logger.info(
                         "[Row %s] ChatGPT generated texts: %s", idx, generated_texts
                     )
+                    chatgpt_generated = True
                 else:
                     print(
                         f"[Row {idx}] Warning: ChatGPT did not return valid text overlays. Using empty texts."
@@ -982,6 +1014,129 @@ def main() -> None:
         base_filename = os.path.basename(main_path)
         filename_no_ext, _ = os.path.splitext(base_filename)
         timestamp = time.strftime("%Y%m%d-%H%M%S")
+
+        # ---------- Auto layout + text generation JSON ----------
+        auto_layout_payload = None
+        auto_layout_used = False
+        if category_val or subcategory_val:
+            try:
+                auto_layout_payload = build_auto_overlay_package(
+                    category=category_val or subcategory_val,
+                    subcategory=subcategory_val,
+                    video_path=main_path,
+                    existing_texts=[text1, text2, text3],
+                    additional_context=post_text_custom or None,
+                    default_location=text1_loc,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[Row %s] Auto layout generation failed: %s", idx, e, exc_info=True
+                )
+
+        if auto_layout_payload:
+            texts_from_auto = auto_layout_payload.get("texts", [])
+            if len(texts_from_auto) >= 3:
+                text1, text2, text3 = texts_from_auto[:3]
+            logger.info(
+                "[Row %s] Auto layout selected location=%s color=%s font_size=%s",
+                idx,
+                auto_layout_payload.get("location"),
+                auto_layout_payload.get("text_color"),
+                auto_layout_payload.get("font_size"),
+            )
+            auto_loc = normalize_location(
+                auto_layout_payload.get("location", text1_loc), default=text1_loc
+            )
+            text1_loc = text2_loc = text3_loc = auto_loc
+
+            if not text_color_raw:
+                text_color_hex = auto_layout_payload.get("text_color", text_color_hex)
+
+            if not text_size_raw:
+                text_size = auto_layout_payload.get("font_size", text_size)
+            auto_layout_used = True
+
+            layout_json_path = os.path.abspath(
+                os.path.join(TEMP_DIR, f"{filename_no_ext}_{timestamp}_layout.json")
+            )
+            try:
+                with open(layout_json_path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "texts": [
+                                {"content": text1, "location": text1_loc},
+                                {"content": text2, "location": text2_loc},
+                                {"content": text3, "location": text3_loc},
+                            ],
+                            "layout": {
+                                "location": auto_loc,
+                                "text_color": text_color_hex,
+                                "font_size": text_size,
+                                "contrast_score": auto_layout_payload.get(
+                                    "contrast_score"
+                                ),
+                                "mean_luminance": auto_layout_payload.get(
+                                    "mean_luminance"
+                                ),
+                            },
+                            "metadata": auto_layout_payload.get("metadata", {}),
+                        },
+                        f,
+                        indent=2,
+                    )
+                print(f"[Row {idx}] Auto layout JSON saved to: {layout_json_path}")
+            except Exception as e:
+                logger.warning(
+                    "[Row %s] Failed to write auto layout JSON: %s",
+                    idx,
+                    e,
+                    exc_info=True,
+                )
+
+        # ---------- Persist generated text/properties back to sheet ----------
+        try:
+
+            def _write(col_idx: Optional[int], value: str, label: str) -> None:
+                if col_idx is None:
+                    return
+                logger.info(
+                    "[Row %s] Writing %s -> %s", idx, label, (value or "").strip()
+                )
+                write_sheet_value(
+                    logger,
+                    ws,
+                    idx,
+                    col_idx,
+                    value,
+                    context=f"{label} write-back",
+                )
+
+            _write(text1_col, text1, "Text1")
+            _write(text2_col, text2, "Text2")
+            _write(text3_col, text3, "Text3")
+            _write(text1_loc_col, text1_loc, "Text1 Location")
+            _write(text2_loc_col, text2_loc, "Text2 Location")
+            _write(text3_loc_col, text3_loc, "Text3 Location")
+
+            if text_size_col and (auto_layout_used or chatgpt_generated) and text_size:
+                _write(text_size_col, str(text_size), "Text Size")
+            if (
+                text_color_col
+                and (auto_layout_used or chatgpt_generated)
+                and text_color_hex
+            ):
+                _write(text_color_col, text_color_hex, "Text Color")
+            logger.info(
+                "[Row %s] Sheet write-back complete (text/layout persisted)", idx
+            )
+        except Exception as e:
+            logger.warning(
+                "[Row %s] Failed to write generated text/layout back to sheet: %s",
+                idx,
+                e,
+                exc_info=True,
+            )
+
         merged_name = f"{filename_no_ext}_{timestamp}_merged.mp4"
         # Ensure output_file is an absolute path in TEMP_DIR
         output_file = os.path.abspath(os.path.join(TEMP_DIR, merged_name))
