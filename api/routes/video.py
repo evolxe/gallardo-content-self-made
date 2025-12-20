@@ -438,7 +438,7 @@ async def download_video(job_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Job not found")
     
     # Allow download for video output jobs
-    if job["type"] not in ["remove_audio", "color_grading", "crop_zoom"]:
+    if job["type"] not in ["remove_audio", "color_grading", "crop_zoom", "reencode", "merge_audio_video"]:
         raise HTTPException(
             status_code=400,
             detail=f"This endpoint is for video downloads only. Job type: {job['type']}",
@@ -467,6 +467,11 @@ async def download_video(job_id: str, request: Request):
         output_size = job.get("parameters", {}).get("output_size", 1080)
         size_suffix = f"{output_size}x{output_size}" if output_size else "square"
         output_filename = f"square_{size_suffix}_{Path(original_filename).stem}.mp4"
+    elif job["type"] == "reencode":
+        codec = job.get("parameters", {}).get("codec", "libx264")
+        output_filename = f"reencoded_{codec}_{Path(original_filename).stem}.mp4"
+    elif job["type"] == "merge_audio_video":
+        output_filename = f"merged_{Path(original_filename).stem}.mp4"
     else:
         output_filename = f"processed_{Path(original_filename).stem}.mp4"
     
@@ -1035,5 +1040,467 @@ async def process_crop_and_zoom(
         try:
             if Path(input_path).exists():
                 Path(input_path).unlink()
+        except Exception:
+            pass
+
+
+
+@router.post("/videos/reencode")
+async def reencode_video(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    codec: Optional[str] = Form("libx264"),
+    bitrate: Optional[str] = Form(None),
+    fps: Optional[float] = Form(None),
+):
+    """
+    Upload a video and re-encode it with specified settings.
+    
+    Accepts a file upload with any field name (e.g., 'video', 'file', 'upload', etc.).
+    The file must be sent as multipart/form-data.
+    
+    Parameters:
+    - codec: Video codec to use (default: "libx264")
+    - bitrate: Target bitrate in kbps format (e.g., "5000k") - optional
+    - fps: Target FPS - optional, uses original if not specified
+    
+    Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
+    When completed, download the video via GET /api/v1/videos/{job_id}/download
+    """
+    job_manager: JobManager = get_job_manager(request)
+    
+    # Parse form data to get the uploaded file (accept any field name)
+    try:
+        form = await request.form()
+    except Exception as e:
+        content_type = request.headers.get("content-type", "NOT SET")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Failed to parse form data",
+                "content_type_received": content_type,
+                "expected": "multipart/form-data",
+                "parsing_error": str(e),
+                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File', 4) Select your video file, 5) Make sure no Content-Type header is manually set"
+            }
+        )
+    
+    # Find the first file in the form data
+    video_file = None
+    field_name = None
+    available_fields = []
+    field_types = {}
+    
+    for key, value in form.items():
+        available_fields.append(key)
+        field_types[key] = type(value).__name__
+        
+        is_upload_file = (
+            isinstance(value, UploadFile) or 
+            type(value).__name__ == "UploadFile" or
+            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
+        )
+        
+        if is_upload_file:
+            video_file = value
+            field_name = key
+            break
+    
+    if not video_file:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "No file uploaded",
+                "found_fields": available_fields,
+                "field_types": field_types,
+                "help": "Make sure you're sending a file, not just text. In Postman, set the key type to 'File' (not 'Text'), then select your video file."
+            }
+        )
+    
+    # Save uploaded file
+    upload_dir = project_root / "temp_videos" / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    input_filename = video_file.filename or "video"
+    input_path = upload_dir / f"reencode_{timestamp}_{input_filename}"
+    
+    try:
+        # Save uploaded video
+        with open(input_path, "wb") as f:
+            content = await video_file.read()
+            f.write(content)
+        
+        # Create output path
+        output_dir = project_root / "temp_videos" / "output" / "reencode"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        output_filename = f"reencoded_{codec}_{timestamp}_{Path(input_filename).stem}.mp4"
+        output_path = output_dir / output_filename
+        
+        # Create job
+        job_id = job_manager.create_job(
+            job_type="reencode",
+            parameters={
+                "input_path": str(input_path),
+                "output_path": str(output_path),
+                "original_filename": input_filename,
+                "codec": codec,
+                "bitrate": bitrate,
+                "fps": fps,
+            },
+            output_path=output_path,
+        )
+        
+        # Start background processing
+        background_tasks.add_task(
+            process_reencode,
+            job_id=job_id,
+            input_path=str(input_path),
+            output_path=str(output_path),
+            codec=codec,
+            bitrate=bitrate,
+            fps=fps,
+            job_manager=job_manager,
+        )
+        
+        # Return job_id immediately
+        return {
+            "job_id": job_id,
+            "status": "pending",
+            "message": "Video upload successful. Re-encoding started.",
+            "status_url": f"/api/v1/jobs/{job_id}",
+            "download_url": f"/api/v1/videos/{job_id}/download",
+            "codec": codec,
+            "bitrate": bitrate,
+            "fps": fps,
+        }
+    
+    except Exception as e:
+        # Clean up on error
+        if input_path.exists():
+            input_path.unlink()
+        raise HTTPException(status_code=500, detail=f"Error processing video: {str(e)}")
+
+
+async def process_reencode(
+    job_id: str,
+    input_path: str,
+    output_path: str,
+    codec: str,
+    bitrate: Optional[str],
+    fps: Optional[float],
+    job_manager: JobManager,
+):
+    """Background task to re-encode video."""
+    try:
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.PROCESSING,
+            progress=10,
+            message="Loading video file...",
+        )
+        
+        # Run re-encoding in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        processor = VideoProcessor()
+        
+        job_manager.update_job(
+            job_id,
+            progress=30,
+            message=f"Re-encoding video with codec {codec}...",
+        )
+        
+        # Process video (runs in thread pool)
+        await loop.run_in_executor(
+            None,
+            processor.reencode_video,
+            input_path,
+            output_path,
+            codec,
+            bitrate,
+            fps,
+        )
+        
+        job_manager.update_job(
+            job_id,
+            progress=90,
+            message="Finalizing video...",
+        )
+        
+        # Verify output file exists
+        if not Path(output_path).exists():
+            raise Exception("Output file was not created")
+        
+        # Update job to completed
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.COMPLETED,
+            progress=100,
+            message=f"Re-encoding completed (codec: {codec})",
+            output_path=Path(output_path),
+        )
+    
+    except Exception as e:
+        error_msg = str(e)
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.FAILED,
+            error=error_msg,
+            message=f"Re-encoding failed: {error_msg}",
+        )
+    
+    finally:
+        # Clean up input file after processing
+        try:
+            if Path(input_path).exists():
+                Path(input_path).unlink()
+        except Exception:
+            pass
+
+
+@router.post("/videos/merge-audio-video")
+async def merge_audio_and_video(
+    background_tasks: BackgroundTasks,
+    request: Request,
+):
+    """
+    Upload a video file and an audio file, merge them together.
+    
+    The longer of the two will be clipped to match the shorter duration.
+    
+    Accepts two file uploads with any field names (e.g., 'video', 'audio', 'file1', 'file2', etc.).
+    The files must be sent as multipart/form-data.
+    
+    Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
+    When completed, download the video via GET /api/v1/videos/{job_id}/download
+    """
+    job_manager: JobManager = get_job_manager(request)
+    
+    # Parse form data to get the uploaded files
+    try:
+        form = await request.form()
+    except Exception as e:
+        content_type = request.headers.get("content-type", "NOT SET")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Failed to parse form data",
+                "content_type_received": content_type,
+                "expected": "multipart/form-data",
+                "parsing_error": str(e),
+                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data', 3) Add two keys with type 'File' - one for video and one for audio"
+            }
+        )
+    
+    # Find video and audio files in the form data
+    video_file = None
+    audio_file = None
+    available_fields = []
+    field_types = {}
+    
+    video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
+    audio_extensions = {'.mp3', '.wav', '.aac', '.m4a', '.ogg', '.flac', '.wma'}
+    
+    for key, value in form.items():
+        available_fields.append(key)
+        field_types[key] = type(value).__name__
+        
+        is_upload_file = (
+            isinstance(value, UploadFile) or 
+            type(value).__name__ == "UploadFile" or
+            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
+        )
+        
+        if is_upload_file:
+            filename = getattr(value, 'filename', '')
+            ext = Path(filename).suffix.lower()
+            
+            # Classify as video or audio based on extension
+            if ext in video_extensions and not video_file:
+                video_file = value
+            elif ext in audio_extensions and not audio_file:
+                audio_file = value
+    
+    # If we couldn't determine by extension, use first two files
+    if not video_file or not audio_file:
+        files = []
+        for key, value in form.items():
+            is_upload_file = (
+                isinstance(value, UploadFile) or 
+                type(value).__name__ == "UploadFile" or
+                (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
+            )
+            if is_upload_file:
+                files.append(value)
+        
+        if len(files) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Need both video and audio files",
+                    "found_fields": available_fields,
+                    "field_types": field_types,
+                    "help": "Upload two files: one video file (mp4, avi, mov, etc.) and one audio file (mp3, wav, aac, etc.)"
+                }
+            )
+        
+        # First file as video, second as audio (or vice versa)
+        if not video_file:
+            video_file = files[0]
+        if not audio_file:
+            audio_file = files[1] if len(files) > 1 else None
+    
+    if not video_file or not audio_file:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Both video and audio files are required",
+                "found_fields": available_fields,
+                "field_types": field_types,
+                "help": "Upload two files: one video file and one audio file"
+            }
+        )
+    
+    # Save uploaded files
+    upload_dir = project_root / "temp_videos" / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    video_filename = video_file.filename or "video"
+    audio_filename = audio_file.filename or "audio"
+    
+    video_path = upload_dir / f"merge_video_{timestamp}_{video_filename}"
+    audio_path = upload_dir / f"merge_audio_{timestamp}_{audio_filename}"
+    
+    try:
+        # Save uploaded video
+        with open(video_path, "wb") as f:
+            content = await video_file.read()
+            f.write(content)
+        
+        # Save uploaded audio
+        with open(audio_path, "wb") as f:
+            content = await audio_file.read()
+            f.write(content)
+        
+        # Create output path
+        output_dir = project_root / "temp_videos" / "output" / "merge_audio_video"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        output_filename = f"merged_{timestamp}_{Path(video_filename).stem}.mp4"
+        output_path = output_dir / output_filename
+        
+        # Create job
+        job_id = job_manager.create_job(
+            job_type="merge_audio_video",
+            parameters={
+                "video_path": str(video_path),
+                "audio_path": str(audio_path),
+                "output_path": str(output_path),
+                "video_filename": video_filename,
+                "audio_filename": audio_filename,
+            },
+            output_path=output_path,
+        )
+        
+        # Start background processing
+        background_tasks.add_task(
+            process_merge_audio_video,
+            job_id=job_id,
+            video_path=str(video_path),
+            audio_path=str(audio_path),
+            output_path=str(output_path),
+            job_manager=job_manager,
+        )
+        
+        # Return job_id immediately
+        return {
+            "job_id": job_id,
+            "status": "pending",
+            "message": "Files uploaded successfully. Merging started.",
+            "status_url": f"/api/v1/jobs/{job_id}",
+            "download_url": f"/api/v1/videos/{job_id}/download",
+        }
+    
+    except Exception as e:
+        # Clean up on error
+        if video_path.exists():
+            video_path.unlink()
+        if audio_path.exists():
+            audio_path.unlink()
+        raise HTTPException(status_code=500, detail=f"Error processing files: {str(e)}")
+
+
+async def process_merge_audio_video(
+    job_id: str,
+    video_path: str,
+    audio_path: str,
+    output_path: str,
+    job_manager: JobManager,
+):
+    """Background task to merge audio and video."""
+    try:
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.PROCESSING,
+            progress=10,
+            message="Loading video and audio files...",
+        )
+        
+        # Run merging in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        processor = VideoProcessor()
+        
+        job_manager.update_job(
+            job_id,
+            progress=30,
+            message="Merging audio with video...",
+        )
+        
+        # Process files (runs in thread pool)
+        await loop.run_in_executor(
+            None,
+            processor.merge_audio_and_video,
+            video_path,
+            audio_path,
+            output_path,
+        )
+        
+        job_manager.update_job(
+            job_id,
+            progress=90,
+            message="Finalizing video...",
+        )
+        
+        # Verify output file exists
+        if not Path(output_path).exists():
+            raise Exception("Output file was not created")
+        
+        # Update job to completed
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.COMPLETED,
+            progress=100,
+            message="Audio and video merged successfully",
+            output_path=Path(output_path),
+        )
+    
+    except Exception as e:
+        error_msg = str(e)
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.FAILED,
+            error=error_msg,
+            message=f"Merge failed: {error_msg}",
+        )
+    
+    finally:
+        # Clean up input files after processing
+        try:
+            if Path(video_path).exists():
+                Path(video_path).unlink()
+            if Path(audio_path).exists():
+                Path(audio_path).unlink()
         except Exception:
             pass

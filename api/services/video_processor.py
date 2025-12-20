@@ -13,7 +13,7 @@ import random
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from moviepy import VideoFileClip
+from moviepy import VideoFileClip, AudioFileClip, CompositeAudioClip
 from moviepy import vfx
 from scenedetect import VideoManager, SceneManager
 from scenedetect.detectors import ContentDetector
@@ -375,4 +375,127 @@ class VideoProcessor:
             video.close()
             if 'cropped_video' in locals():
                 cropped_video.close()
+    
+    def reencode_video(
+        self,
+        input_path: str,
+        output_path: str,
+        codec: str = "libx264",
+        bitrate: Optional[str] = None,
+        fps: Optional[float] = None,
+    ):
+        """
+        Re-encode a video file with specified settings.
+        
+        Args:
+            input_path: Path to input video file
+            output_path: Path to save output video
+            codec: Video codec to use (default: "libx264")
+            bitrate: Target bitrate (e.g., "5000k") - optional
+            fps: Target FPS - optional, uses original if not specified
+            
+        Raises:
+            FileNotFoundError: If input file doesn't exist
+            Exception: If video processing fails
+        """
+        # Validate input file exists
+        if not Path(input_path).exists():
+            raise FileNotFoundError(f"Input video file not found: {input_path}")
+        
+        # Ensure output directory exists
+        output_dir = Path(output_path).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Load video
+        video = VideoFileClip(input_path)
+        
+        try:
+            # Apply FPS change if specified
+            if fps and fps > 0:
+                video = video.with_fps(fps)
+            
+            # Prepare write_videofile arguments
+            write_kwargs = {
+                "codec": codec,
+            }
+            
+            # Add bitrate if specified
+            if bitrate:
+                write_kwargs["bitrate"] = bitrate
+            
+            # Write output video (re-encoded)
+            video.write_videofile(
+                output_path,
+                **write_kwargs
+            )
+            
+        finally:
+            # Clean up
+            video.close()
+    
+    def merge_audio_and_video(
+        self,
+        video_path: str,
+        audio_path: str,
+        output_path: str,
+    ):
+        """
+        Merge an audio file with a video file.
+        
+        The longer of the two will be clipped to match the shorter duration.
+        
+        Args:
+            video_path: Path to input video file
+            audio_path: Path to input audio file
+            output_path: Path to save output video with merged audio
+            
+        Raises:
+            FileNotFoundError: If input files don't exist
+            Exception: If video processing fails
+        """
+        # Validate input files exist
+        if not Path(video_path).exists():
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+        if not Path(audio_path).exists():
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+        
+        # Ensure output directory exists
+        output_dir = Path(output_path).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Load video and audio
+        video = VideoFileClip(video_path)
+        audio = AudioFileClip(audio_path)
+        
+        try:
+            # Get durations
+            video_duration = video.duration
+            audio_duration = audio.duration
+            
+            # Determine shorter duration
+            target_duration = min(video_duration, audio_duration)
+            
+            # Clip both to match the shorter duration
+            if video_duration > target_duration:
+                video = video.subclip(0, target_duration)
+            
+            if audio_duration > target_duration:
+                audio = audio.subclip(0, target_duration)
+            
+            # Set audio to video
+            video_with_audio = video.with_audio(audio)
+            
+            # Write output video with merged audio
+            video_with_audio.write_videofile(
+                output_path,
+                codec="libx264",
+                audio_codec="aac",
+            )
+            
+        finally:
+            # Clean up
+            video.close()
+            audio.close()
+            if 'video_with_audio' in locals():
+                video_with_audio.close()
 

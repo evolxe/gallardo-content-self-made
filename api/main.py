@@ -56,6 +56,12 @@ async def lifespan(app: FastAPI):
     crop_zoom_dir = temp_dir / "output" / "crop_zoom"
     crop_zoom_dir.mkdir(parents=True, exist_ok=True)
     
+    reencode_dir = temp_dir / "output" / "reencode"
+    reencode_dir.mkdir(parents=True, exist_ok=True)
+    
+    merge_audio_video_dir = temp_dir / "output" / "merge_audio_video"
+    merge_audio_video_dir.mkdir(parents=True, exist_ok=True)
+    
     yield
     
     # Shutdown
