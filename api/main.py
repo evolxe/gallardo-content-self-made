@@ -62,6 +62,9 @@ async def lifespan(app: FastAPI):
     merge_audio_video_dir = temp_dir / "output" / "merge_audio_video"
     merge_audio_video_dir.mkdir(parents=True, exist_ok=True)
     
+    comprehensive_dir = temp_dir / "output" / "comprehensive"
+    comprehensive_dir.mkdir(parents=True, exist_ok=True)
+    
     yield
     
     # Shutdown

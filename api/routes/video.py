@@ -438,7 +438,7 @@ async def download_video(job_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Job not found")
     
     # Allow download for video output jobs
-    if job["type"] not in ["remove_audio", "color_grading", "crop_zoom", "reencode", "merge_audio_video"]:
+    if job["type"] not in ["remove_audio", "color_grading", "crop_zoom", "reencode", "merge_audio_video", "comprehensive"]:
         raise HTTPException(
             status_code=400,
             detail=f"This endpoint is for video downloads only. Job type: {job['type']}",
@@ -472,6 +472,9 @@ async def download_video(job_id: str, request: Request):
         output_filename = f"reencoded_{codec}_{Path(original_filename).stem}.mp4"
     elif job["type"] == "merge_audio_video":
         output_filename = f"merged_{Path(original_filename).stem}.mp4"
+    elif job["type"] == "comprehensive":
+        # Use the actual output filename from the job parameters
+        output_filename = Path(job.get("output_path", "")).name or f"processed_{Path(original_filename).stem}.mp4"
     else:
         output_filename = f"processed_{Path(original_filename).stem}.mp4"
     
@@ -1501,6 +1504,390 @@ async def process_merge_audio_video(
             if Path(video_path).exists():
                 Path(video_path).unlink()
             if Path(audio_path).exists():
+                Path(audio_path).unlink()
+        except Exception:
+            pass
+
+
+
+@router.post("/videos/process")
+async def process_video_comprehensive(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    remove_audio: Optional[bool] = Form(False),
+    merge_audio: Optional[bool] = Form(False),
+    color_grading: Optional[bool] = Form(False),
+    color_preset: Optional[str] = Form("cinematic"),
+    color_brightness: Optional[float] = Form(0.0),
+    color_contrast: Optional[float] = Form(1.0),
+    color_saturation: Optional[float] = Form(1.0),
+    crop_zoom: Optional[bool] = Form(False),
+    crop_output_size: Optional[int] = Form(1080),
+    reencode: Optional[bool] = Form(False),
+    codec: Optional[str] = Form("libx264"),
+    bitrate: Optional[str] = Form(None),
+    fps: Optional[float] = Form(None),
+):
+    """
+    Comprehensive video processing endpoint - apply multiple transformations in one request.
+    
+    Upload a video file (and optionally an audio file) and apply multiple processing operations
+    based on boolean flags. All operations are applied in sequence:
+    1. Merge audio (if merge_audio=True and audio file provided)
+    2. Remove audio (if remove_audio=True, overrides merge_audio)
+    3. Color grading (if color_grading=True)
+    4. Crop and zoom to square (if crop_zoom=True)
+    5. Re-encode (if reencode=True)
+    
+    Accepts file uploads with any field names. The files must be sent as multipart/form-data.
+    
+    Boolean Parameters (all default to False):
+    - remove_audio: Remove audio track from video
+    - merge_audio: Merge audio file with video (requires audio file upload)
+    - color_grading: Apply color grading
+    - crop_zoom: Crop to center 1:1 square aspect ratio
+    - reencode: Re-encode video with specified codec/bitrate/fps
+    
+    Color Grading Parameters (if color_grading=True):
+    - color_preset: Preset name (cinematic, warm, cool, vintage, vivid, bw, natural, random)
+    - color_brightness: Brightness adjustment (-1.0 to 1.0)
+    - color_contrast: Contrast adjustment (0.0 to 2.0)
+    - color_saturation: Saturation adjustment (0.0 to 2.0)
+    
+    Crop Parameters (if crop_zoom=True):
+    - crop_output_size: Output square size in pixels (default: 1080)
+    
+    Re-encode Parameters (if reencode=True):
+    - codec: Video codec (default: "libx264")
+    - bitrate: Target bitrate in kbps format (e.g., "5000k")
+    - fps: Target FPS
+    
+    Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
+    When completed, download the video via GET /api/v1/videos/{job_id}/download
+    """
+    job_manager: JobManager = get_job_manager(request)
+    
+    # Parse form data to get uploaded files
+    try:
+        form = await request.form()
+    except Exception as e:
+        content_type = request.headers.get("content-type", "NOT SET")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Failed to parse form data",
+                "content_type_received": content_type,
+                "expected": "multipart/form-data",
+                "parsing_error": str(e),
+                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data', 3) Add file keys and boolean parameters"
+            }
+        )
+    
+    # Find video and audio files
+    video_file = None
+    audio_file = None
+    video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
+    audio_extensions = {'.mp3', '.wav', '.aac', '.m4a', '.ogg', '.flac', '.wma'}
+    
+    available_fields = []
+    field_types = {}
+    
+    for key, value in form.items():
+        available_fields.append(key)
+        field_types[key] = type(value).__name__
+        
+        is_upload_file = (
+            isinstance(value, UploadFile) or 
+            type(value).__name__ == "UploadFile" or
+            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
+        )
+        
+        if is_upload_file:
+            filename = getattr(value, 'filename', '')
+            ext = Path(filename).suffix.lower()
+            
+            if ext in video_extensions and not video_file:
+                video_file = value
+            elif ext in audio_extensions and not audio_file:
+                audio_file = value
+    
+    # If we couldn't determine by extension, use first file as video, second as audio
+    if not video_file:
+        files = []
+        for key, value in form.items():
+            is_upload_file = (
+                isinstance(value, UploadFile) or 
+                type(value).__name__ == "UploadFile" or
+                (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
+            )
+            if is_upload_file:
+                files.append(value)
+        
+        if len(files) > 0:
+            video_file = files[0]
+        if len(files) > 1:
+            audio_file = files[1]
+    
+    if not video_file:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "No video file uploaded",
+                "found_fields": available_fields,
+                "field_types": field_types,
+                "help": "Upload at least one video file"
+            }
+        )
+    
+    # Validate merge_audio requires audio file
+    if merge_audio and not audio_file:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "merge_audio=True requires an audio file to be uploaded",
+                "help": "Upload both a video file and an audio file when merge_audio=True"
+            }
+        )
+    
+    # Save uploaded files
+    upload_dir = project_root / "temp_videos" / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    video_filename = video_file.filename or "video"
+    input_video_path = upload_dir / f"process_{timestamp}_{video_filename}"
+    
+    input_audio_path = None
+    if audio_file:
+        audio_filename = audio_file.filename or "audio"
+        input_audio_path = upload_dir / f"process_audio_{timestamp}_{audio_filename}"
+    
+    try:
+        # Save uploaded video
+        with open(input_video_path, "wb") as f:
+            content = await video_file.read()
+            f.write(content)
+        
+        # Save uploaded audio if provided
+        if audio_file and input_audio_path:
+            with open(input_audio_path, "wb") as f:
+                content = await audio_file.read()
+                f.write(content)
+        
+        # Create output path
+        output_dir = project_root / "temp_videos" / "output" / "comprehensive"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Build output filename with operations included
+        operations = []
+        if remove_audio:
+            operations.append("no_audio")
+        if merge_audio:
+            operations.append("merged")
+        if color_grading:
+            operations.append(f"graded_{color_preset}")
+        if crop_zoom:
+            operations.append(f"square_{crop_output_size}")
+        if reencode:
+            operations.append(f"reencoded_{codec}")
+        
+        ops_suffix = "_".join(operations) if operations else "processed"
+        output_filename = f"{ops_suffix}_{timestamp}_{Path(video_filename).stem}.mp4"
+        output_path = output_dir / output_filename
+        
+        # Create job
+        job_id = job_manager.create_job(
+            job_type="comprehensive",
+            parameters={
+                "video_path": str(input_video_path),
+                "audio_path": str(input_audio_path) if input_audio_path else None,
+                "output_path": str(output_path),
+                "video_filename": video_filename,
+                "audio_filename": audio_file.filename if audio_file else None,
+                "remove_audio": remove_audio,
+                "merge_audio": merge_audio,
+                "color_grading": color_grading,
+                "color_preset": color_preset,
+                "color_brightness": color_brightness,
+                "color_contrast": color_contrast,
+                "color_saturation": color_saturation,
+                "crop_zoom": crop_zoom,
+                "crop_output_size": crop_output_size,
+                "reencode": reencode,
+                "codec": codec,
+                "bitrate": bitrate,
+                "fps": fps,
+            },
+            output_path=output_path,
+        )
+        
+        # Start background processing
+        background_tasks.add_task(
+            process_comprehensive,
+            job_id=job_id,
+            video_path=str(input_video_path),
+            audio_path=str(input_audio_path) if input_audio_path else None,
+            output_path=str(output_path),
+            remove_audio=remove_audio,
+            merge_audio=merge_audio,
+            color_grading=color_grading,
+            color_preset=color_preset,
+            color_brightness=color_brightness,
+            color_contrast=color_contrast,
+            color_saturation=color_saturation,
+            crop_zoom=crop_zoom,
+            crop_output_size=crop_output_size,
+            reencode=reencode,
+            codec=codec,
+            bitrate=bitrate,
+            fps=fps,
+            job_manager=job_manager,
+        )
+        
+        # Build operations list for response
+        applied_operations = []
+        if remove_audio:
+            applied_operations.append("remove_audio")
+        if merge_audio:
+            applied_operations.append("merge_audio")
+        if color_grading:
+            applied_operations.append(f"color_grading({color_preset})")
+        if crop_zoom:
+            applied_operations.append(f"crop_zoom({crop_output_size}x{crop_output_size})")
+        if reencode:
+            applied_operations.append(f"reencode({codec})")
+        
+        return {
+            "job_id": job_id,
+            "status": "pending",
+            "message": "Video upload successful. Processing started.",
+            "status_url": f"/api/v1/jobs/{job_id}",
+            "download_url": f"/api/v1/videos/{job_id}/download",
+            "applied_operations": applied_operations if applied_operations else ["none"],
+        }
+    
+    except Exception as e:
+        # Clean up on error
+        if input_video_path.exists():
+            input_video_path.unlink()
+        if input_audio_path and input_audio_path.exists():
+            input_audio_path.unlink()
+        raise HTTPException(status_code=500, detail=f"Error processing video: {str(e)}")
+
+
+async def process_comprehensive(
+    job_id: str,
+    video_path: str,
+    audio_path: Optional[str],
+    output_path: str,
+    remove_audio: bool,
+    merge_audio: bool,
+    color_grading: bool,
+    color_preset: str,
+    color_brightness: float,
+    color_contrast: float,
+    color_saturation: float,
+    crop_zoom: bool,
+    crop_output_size: int,
+    reencode: bool,
+    codec: str,
+    bitrate: Optional[str],
+    fps: Optional[float],
+    job_manager: JobManager,
+):
+    """Background task for comprehensive video processing."""
+    try:
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.PROCESSING,
+            progress=5,
+            message="Loading video file...",
+        )
+        
+        # Run processing in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        processor = VideoProcessor()
+        
+        # Build operations list for progress messages
+        operations = []
+        if remove_audio:
+            operations.append("removing audio")
+        if merge_audio:
+            operations.append("merging audio")
+        if color_grading:
+            operations.append(f"color grading ({color_preset})")
+        if crop_zoom:
+            operations.append(f"cropping to square ({crop_output_size}x{crop_output_size})")
+        if reencode:
+            operations.append(f"re-encoding ({codec})")
+        
+        progress_steps = len(operations) if operations else 1
+        step_progress = 85 / progress_steps if progress_steps > 0 else 85
+        current_progress = 10
+        
+        job_manager.update_job(
+            job_id,
+            progress=current_progress,
+            message=f"Processing video: {', '.join(operations) if operations else 'no operations'}",
+        )
+        
+        # Process video (runs in thread pool)
+        await loop.run_in_executor(
+            None,
+            processor.process_video_comprehensive,
+            video_path,
+            output_path,
+            audio_path,
+            remove_audio,
+            merge_audio,
+            color_grading,
+            color_preset,
+            color_brightness,
+            color_contrast,
+            color_saturation,
+            crop_zoom,
+            crop_output_size,
+            reencode,
+            codec,
+            bitrate,
+            fps,
+        )
+        
+        job_manager.update_job(
+            job_id,
+            progress=95,
+            message="Finalizing video...",
+        )
+        
+        # Verify output file exists
+        if not Path(output_path).exists():
+            raise Exception("Output file was not created")
+        
+        # Update job to completed
+        operations_summary = ", ".join(operations) if operations else "no transformations"
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.COMPLETED,
+            progress=100,
+            message=f"Video processing completed ({operations_summary})",
+            output_path=Path(output_path),
+        )
+    
+    except Exception as e:
+        error_msg = str(e)
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.FAILED,
+            error=error_msg,
+            message=f"Video processing failed: {error_msg}",
+        )
+    
+    finally:
+        # Clean up input files after processing
+        try:
+            if Path(video_path).exists():
+                Path(video_path).unlink()
+            if audio_path and Path(audio_path).exists():
                 Path(audio_path).unlink()
         except Exception:
             pass

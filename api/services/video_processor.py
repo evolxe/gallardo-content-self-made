@@ -498,4 +498,206 @@ class VideoProcessor:
             audio.close()
             if 'video_with_audio' in locals():
                 video_with_audio.close()
+    
+    def process_video_comprehensive(
+        self,
+        video_path: str,
+        output_path: str,
+        audio_path: Optional[str] = None,
+        remove_audio: bool = False,
+        merge_audio: bool = False,
+        color_grading: bool = False,
+        color_preset: str = "cinematic",
+        color_brightness: float = 0.0,
+        color_contrast: float = 1.0,
+        color_saturation: float = 1.0,
+        crop_zoom: bool = False,
+        crop_output_size: int = 1080,
+        reencode: bool = False,
+        codec: str = "libx264",
+        bitrate: Optional[str] = None,
+        fps: Optional[float] = None,
+    ):
+        """
+        Apply multiple video processing operations in sequence.
+        
+        Processing order:
+        1. Load video (and audio if provided)
+        2. Merge audio with video (if merge_audio is True)
+        3. Remove audio (if remove_audio is True - overrides merge_audio)
+        4. Color grading (if color_grading is True)
+        5. Crop and zoom to square (if crop_zoom is True)
+        6. Re-encode (if reencode is True, or always at the end to finalize)
+        
+        Args:
+            video_path: Path to input video file
+            output_path: Path to save output video
+            audio_path: Optional path to audio file for merging
+            remove_audio: If True, remove audio track
+            merge_audio: If True, merge audio file with video (requires audio_path)
+            color_grading: If True, apply color grading
+            color_preset: Color grading preset (if color_grading is True)
+            color_brightness: Brightness adjustment (-1.0 to 1.0)
+            color_contrast: Contrast adjustment (0.0 to 2.0)
+            color_saturation: Saturation adjustment (0.0 to 2.0)
+            crop_zoom: If True, crop to center square
+            crop_output_size: Output square size (if crop_zoom is True)
+            reencode: If True, re-encode with specified settings
+            codec: Video codec for re-encoding
+            bitrate: Target bitrate for re-encoding
+            fps: Target FPS for re-encoding
+            
+        Raises:
+            FileNotFoundError: If input files don't exist
+            ValueError: If invalid parameters provided
+            Exception: If video processing fails
+        """
+        # Validate input file exists
+        if not Path(video_path).exists():
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+        
+        # Validate merge_audio requires audio_path
+        if merge_audio and not audio_path:
+            raise ValueError("merge_audio requires audio_path to be provided")
+        
+        if merge_audio and not Path(audio_path).exists():
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+        
+        # Ensure output directory exists
+        output_dir = Path(output_path).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Load video
+        video = VideoFileClip(video_path)
+        audio_clip = None
+        
+        try:
+            # Step 1: Handle audio merging or removal
+            if merge_audio and not remove_audio:
+                # Merge audio with video
+                audio_clip = AudioFileClip(audio_path)
+                
+                # Get durations
+                video_duration = video.duration
+                audio_duration = audio_clip.duration
+                
+                # Determine shorter duration
+                target_duration = min(video_duration, audio_duration)
+                
+                # Clip both to match the shorter duration
+                if video_duration > target_duration:
+                    video = video.subclip(0, target_duration)
+                
+                if audio_duration > target_duration:
+                    audio_clip = audio_clip.subclip(0, target_duration)
+                
+                # Set audio to video
+                video = video.with_audio(audio_clip)
+            
+            elif remove_audio:
+                # Remove audio track
+                video = video.without_audio()
+            
+            # Step 2: Apply color grading
+            if color_grading:
+                # Use random preset if preset is "random"
+                if color_preset == "random":
+                    preset, brightness, contrast, saturation = self.generate_random_color_grading()
+                else:
+                    preset = color_preset
+                    brightness = color_brightness if color_brightness != 0.0 else None
+                    contrast = color_contrast if color_contrast != 1.0 else None
+                    saturation = color_saturation if color_saturation != 1.0 else None
+                
+                # Get preset settings
+                preset_settings = {
+                    "cinematic": {"brightness": 0.0, "contrast": 1.2, "saturation": 1.1, "color_temperature": "cool"},
+                    "warm": {"brightness": 0.1, "contrast": 1.1, "saturation": 1.2, "color_temperature": "warm"},
+                    "cool": {"brightness": 0.0, "contrast": 1.1, "saturation": 1.1, "color_temperature": "cool"},
+                    "vintage": {"brightness": 0.15, "contrast": 1.15, "saturation": 0.7, "color_temperature": "warm"},
+                    "vivid": {"brightness": 0.0, "contrast": 1.3, "saturation": 1.5, "color_temperature": "neutral"},
+                    "bw": {"brightness": 0.0, "contrast": 1.2, "saturation": 0.0, "color_temperature": "neutral"},
+                    "natural": {"brightness": 0.0, "contrast": 1.0, "saturation": 1.0, "color_temperature": "neutral"},
+                }
+                
+                preset_config = preset_settings.get(preset, preset_settings["cinematic"])
+                final_brightness = brightness if brightness is not None else preset_config["brightness"]
+                final_contrast = contrast if contrast is not None else preset_config["contrast"]
+                final_saturation = saturation if saturation is not None else preset_config["saturation"]
+                color_temp = preset_config["color_temperature"]
+                
+                # Apply color grading
+                def apply_grading_to_frame(t):
+                    frame = video.get_frame(t)
+                    frame_float = frame.astype(np.float32) / 255.0
+                    
+                    # Apply brightness
+                    frame_float = np.clip(frame_float + final_brightness, 0, 1)
+                    
+                    # Apply contrast
+                    frame_float = np.clip((frame_float - 0.5) * final_contrast + 0.5, 0, 1)
+                    
+                    # Apply saturation
+                    if final_saturation != 1.0:
+                        gray = np.mean(frame_float, axis=2, keepdims=True)
+                        frame_float = np.clip(gray + (frame_float - gray) * final_saturation, 0, 1)
+                    
+                    # Apply color temperature
+                    if color_temp == "warm":
+                        frame_float[:, :, 0] = np.clip(frame_float[:, :, 0] * 1.1, 0, 1)
+                        frame_float[:, :, 2] = np.clip(frame_float[:, :, 2] * 0.95, 0, 1)
+                    elif color_temp == "cool":
+                        frame_float[:, :, 0] = np.clip(frame_float[:, :, 0] * 0.95, 0, 1)
+                        frame_float[:, :, 2] = np.clip(frame_float[:, :, 2] * 1.1, 0, 1)
+                    
+                    frame_processed = (frame_float * 255.0).astype(np.uint8)
+                    return frame_processed
+                
+                video = video.with_updated_frame_function(apply_grading_to_frame)
+            
+            # Step 3: Crop and zoom to square
+            if crop_zoom:
+                w, h = video.size
+                w, h = int(w), int(h)
+                square_size = min(w, h)
+                crop_x = (w - square_size) // 2
+                crop_y = (h - square_size) // 2
+                
+                video = video.with_effects([
+                    vfx.Crop(x1=crop_x, y1=crop_y, x2=crop_x + square_size, y2=crop_y + square_size)
+                ])
+                
+                if crop_output_size and crop_output_size > 0 and crop_output_size != square_size:
+                    video = video.with_effects([
+                        vfx.Resize((crop_output_size, crop_output_size))
+                    ])
+            
+            # Step 4: Apply FPS change if reencoding with FPS
+            if reencode and fps and fps > 0:
+                video = video.with_fps(fps)
+            
+            # Prepare write_videofile arguments
+            write_kwargs = {
+                "codec": codec,
+            }
+            
+            # Add bitrate if specified
+            if reencode and bitrate:
+                write_kwargs["bitrate"] = bitrate
+            
+            # Add audio codec only if video has audio
+            if video.audio is not None:
+                write_kwargs["audio_codec"] = "aac"
+            
+            # Write output video
+            video.write_videofile(
+                output_path,
+                **write_kwargs
+            )
+            
+        finally:
+            # Clean up
+            video.close()
+            if audio_clip:
+                audio_clip.close()
 
