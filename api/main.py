@@ -35,13 +35,20 @@ async def lifespan(app: FastAPI):
     print("Service starting...")
     print("=" * 80)
     
-    # Ensure temp directories exist
+    # Ensure temp directories exist - organized by use case
     temp_dir = project_root / "temp_videos"
     temp_dir.mkdir(exist_ok=True)
+    
+    # Upload directory (shared across all use cases)
     upload_dir = temp_dir / "uploads"
     upload_dir.mkdir(exist_ok=True)
-    output_dir = temp_dir / "output"
-    output_dir.mkdir(exist_ok=True)
+    
+    # Output directories organized by use case
+    audio_removal_dir = temp_dir / "output" / "audio_removal"
+    audio_removal_dir.mkdir(parents=True, exist_ok=True)
+    
+    scene_detection_dir = temp_dir / "output" / "scene_detection"
+    scene_detection_dir.mkdir(parents=True, exist_ok=True)
     
     yield
     
