@@ -6,4 +6,8 @@ gspread
 google-auth
 python-dotenv
 flask
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
 
