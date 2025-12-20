@@ -5,7 +5,9 @@ Video processing service for audio removal and other video operations.
 import os
 import sys
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
+import numpy as np
+import random
 
 # Add project root to path
 project_root = Path(__file__).resolve().parent.parent.parent
@@ -119,4 +121,191 @@ class VideoProcessor:
             
         finally:
             video_manager.release()
+    
+    @staticmethod
+    def generate_random_color_grading() -> Tuple[str, float, float, float]:
+        """
+        Generate random color grading parameters.
+        
+        Returns:
+            Tuple of (preset, brightness, contrast, saturation)
+        """
+        valid_presets = ["cinematic", "warm", "cool", "vintage", "vivid", "bw", "natural"]
+        
+        # Randomly select a preset
+        preset = random.choice(valid_presets)
+        
+        # Generate random adjustments within reasonable ranges
+        # Brightness: slightly darker to slightly brighter (-0.2 to 0.2)
+        brightness = random.uniform(-0.2, 0.2)
+        
+        # Contrast: normal to high (0.9 to 1.4)
+        contrast = random.uniform(0.9, 1.4)
+        
+        # Saturation: low to high (0.7 to 1.5)
+        saturation = random.uniform(0.7, 1.5)
+        
+        return preset, brightness, contrast, saturation
+    
+    def apply_color_grading(
+        self,
+        input_path: str,
+        output_path: str,
+        preset: str = "cinematic",
+        brightness: float = 0.0,
+        contrast: float = 1.0,
+        saturation: float = 1.0,
+    ):
+        """
+        Apply color grading to a video file.
+        
+        Args:
+            input_path: Path to input video file
+            output_path: Path to save output video
+            preset: Color grading preset name
+                Options: "cinematic", "warm", "cool", "vintage", "vivid", "bw", "natural"
+            brightness: Brightness adjustment (-1.0 to 1.0, 0.0 = no change)
+            contrast: Contrast adjustment (0.0 to 2.0, 1.0 = no change)
+            saturation: Saturation adjustment (0.0 to 2.0, 1.0 = no change)
+            
+        Raises:
+            FileNotFoundError: If input file doesn't exist
+            ValueError: If preset is invalid
+            Exception: If video processing fails
+        """
+        # Validate input file exists
+        if not Path(input_path).exists():
+            raise FileNotFoundError(f"Input video file not found: {input_path}")
+        
+        # Validate preset
+        valid_presets = ["cinematic", "warm", "cool", "vintage", "vivid", "bw", "natural"]
+        if preset not in valid_presets:
+            raise ValueError(
+                f"Invalid preset '{preset}'. Valid options: {', '.join(valid_presets)}"
+            )
+        
+        # Ensure output directory exists
+        output_dir = Path(output_path).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Load video
+        video = VideoFileClip(input_path)
+        
+        try:
+            # Define preset adjustments (can be combined with manual adjustments)
+            preset_settings = {
+                "cinematic": {
+                    "brightness": 0.0,
+                    "contrast": 1.2,
+                    "saturation": 1.1,
+                    "color_temperature": "cool",  # Slight blue shift
+                },
+                "warm": {
+                    "brightness": 0.1,
+                    "contrast": 1.1,
+                    "saturation": 1.2,
+                    "color_temperature": "warm",  # Orange/red shift
+                },
+                "cool": {
+                    "brightness": 0.0,
+                    "contrast": 1.1,
+                    "saturation": 1.1,
+                    "color_temperature": "cool",  # Blue/cyan shift
+                },
+                "vintage": {
+                    "brightness": 0.15,
+                    "contrast": 1.15,
+                    "saturation": 0.7,
+                    "color_temperature": "warm",  # Sepia-like
+                },
+                "vivid": {
+                    "brightness": 0.0,
+                    "contrast": 1.3,
+                    "saturation": 1.5,
+                    "color_temperature": "neutral",
+                },
+                "bw": {
+                    "brightness": 0.0,
+                    "contrast": 1.2,
+                    "saturation": 0.0,  # Grayscale
+                    "color_temperature": "neutral",
+                },
+                "natural": {
+                    "brightness": 0.0,
+                    "contrast": 1.0,
+                    "saturation": 1.0,
+                    "color_temperature": "neutral",
+                },
+            }
+            
+            # Get preset settings
+            preset_config = preset_settings[preset]
+            
+            # Combine preset with manual adjustments (manual takes precedence if != default)
+            final_brightness = brightness if brightness != 0.0 else preset_config["brightness"]
+            final_contrast = contrast if contrast != 1.0 else preset_config["contrast"]
+            final_saturation = saturation if saturation != 1.0 else preset_config["saturation"]
+            color_temp = preset_config["color_temperature"]
+            
+            # Apply color grading using numpy operations on each frame
+            def apply_grading_to_frame(t):
+                """
+                Apply color grading to a frame at time t.
+                This function is called for each frame in the video.
+                
+                Args:
+                    t: time in seconds (float)
+                    
+                Returns:
+                    Processed frame as numpy array with dtype uint8
+                """
+                # Get the original frame at time t
+                frame = video.get_frame(t)
+                
+                # Convert to float for processing
+                frame_float = frame.astype(np.float32) / 255.0
+                
+                # Apply brightness (add/subtract value)
+                frame_float = np.clip(frame_float + final_brightness, 0, 1)
+                
+                # Apply contrast (center at 0.5, multiply, then shift back)
+                frame_float = np.clip((frame_float - 0.5) * final_contrast + 0.5, 0, 1)
+                
+                # Apply saturation
+                if final_saturation != 1.0:
+                    # Calculate grayscale version
+                    gray = np.mean(frame_float, axis=2, keepdims=True)
+                    # Blend between grayscale and color based on saturation
+                    frame_float = np.clip(gray + (frame_float - gray) * final_saturation, 0, 1)
+                
+                # Apply color temperature adjustment
+                if color_temp == "warm":
+                    # Add warm tones (increase red, decrease blue)
+                    frame_float[:, :, 0] = np.clip(frame_float[:, :, 0] * 1.1, 0, 1)  # Red
+                    frame_float[:, :, 2] = np.clip(frame_float[:, :, 2] * 0.95, 0, 1)  # Blue
+                elif color_temp == "cool":
+                    # Add cool tones (increase blue, decrease red)
+                    frame_float[:, :, 0] = np.clip(frame_float[:, :, 0] * 0.95, 0, 1)  # Red
+                    frame_float[:, :, 2] = np.clip(frame_float[:, :, 2] * 1.1, 0, 1)  # Blue
+                
+                # Convert back to uint8
+                frame_processed = (frame_float * 255.0).astype(np.uint8)
+                
+                return frame_processed
+            
+            # Apply the color grading effect using with_updated_frame_function (MoviePy v2 API)
+            # This method takes a function: func(t: float) -> ndarray that returns the processed frame
+            graded_video = video.with_updated_frame_function(apply_grading_to_frame)
+            
+            # Write output video
+            graded_video.write_videofile(
+                output_path,
+                codec="libx264",
+            )
+            
+        finally:
+            # Clean up
+            video.close()
+            if 'graded_video' in locals():
+                graded_video.close()
 

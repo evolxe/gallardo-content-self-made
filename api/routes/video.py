@@ -429,7 +429,7 @@ async def process_scene_detection(
 
 @router.get("/videos/{job_id}/download")
 async def download_video(job_id: str, request: Request):
-    """Download processed video by job ID (for audio removal jobs)."""
+    """Download processed video by job ID (for audio removal and color grading jobs)."""
     job_manager: JobManager = get_job_manager(request)
     
     job = job_manager.get_job(job_id)
@@ -437,7 +437,8 @@ async def download_video(job_id: str, request: Request):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    if job["type"] != "remove_audio":
+    # Allow download for video output jobs
+    if job["type"] not in ["remove_audio", "color_grading"]:
         raise HTTPException(
             status_code=400,
             detail=f"This endpoint is for video downloads only. Job type: {job['type']}",
@@ -455,7 +456,15 @@ async def download_video(job_id: str, request: Request):
     
     # Get original filename if available
     original_filename = job.get("parameters", {}).get("original_filename", "video.mp4")
-    output_filename = f"no_audio_{Path(original_filename).stem}.mp4"
+    
+    # Generate appropriate output filename based on job type
+    if job["type"] == "remove_audio":
+        output_filename = f"no_audio_{Path(original_filename).stem}.mp4"
+    elif job["type"] == "color_grading":
+        preset = job.get("parameters", {}).get("preset", "graded")
+        output_filename = f"graded_{preset}_{Path(original_filename).stem}.mp4"
+    else:
+        output_filename = f"processed_{Path(original_filename).stem}.mp4"
     
     return FileResponse(
         output_path,
@@ -539,3 +548,278 @@ async def download_scene_data(job_id: str, request: Request):
         media_type="application/json",
         filename=output_filename,
     )
+
+
+@router.post("/videos/color-grade")
+async def color_grade_video(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    preset: Optional[str] = Form("random"),
+    brightness: Optional[float] = Form(None),
+    contrast: Optional[float] = Form(None),
+    saturation: Optional[float] = Form(None),
+):
+    """
+    Upload a video and apply color grading.
+    
+    Accepts a file upload with any field name (e.g., 'video', 'file', 'upload', etc.).
+    The file must be sent as multipart/form-data.
+    
+    Parameters:
+    - preset: Color grading preset (cinematic, warm, cool, vintage, vivid, bw, natural, random)
+              Defaults to "random" which applies random color grading
+    - brightness: Brightness adjustment (-1.0 to 1.0). If not provided, will be random when preset is "random"
+    - contrast: Contrast adjustment (0.0 to 2.0). If not provided, will be random when preset is "random"
+    - saturation: Saturation adjustment (0.0 to 2.0). If not provided, will be random when preset is "random"
+    
+    Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
+    When completed, download the video via GET /api/v1/videos/{job_id}/download
+    """
+    job_manager: JobManager = get_job_manager(request)
+    
+    valid_presets = ["cinematic", "warm", "cool", "vintage", "vivid", "bw", "natural", "random"]
+    
+    # Generate random parameters if preset is "random" or if parameters are None
+    use_random = preset == "random"
+    
+    if use_random:
+        # Generate random color grading parameters
+        preset, brightness, contrast, saturation = VideoProcessor.generate_random_color_grading()
+    else:
+        # Validate preset if not random
+        if preset not in valid_presets:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Invalid preset '{preset}'",
+                    "valid_presets": valid_presets,
+                    "help": f"Choose one of: {', '.join(valid_presets)}"
+                }
+            )
+        
+        # Use defaults if parameters are None (only when not using random)
+        if brightness is None:
+            brightness = 0.0
+        if contrast is None:
+            contrast = 1.0
+        if saturation is None:
+            saturation = 1.0
+    
+    # Validate adjustment ranges
+    if not -1.0 <= brightness <= 1.0:
+        raise HTTPException(
+            status_code=400,
+            detail="Brightness must be between -1.0 and 1.0"
+        )
+    if not 0.0 <= contrast <= 2.0:
+        raise HTTPException(
+            status_code=400,
+            detail="Contrast must be between 0.0 and 2.0"
+        )
+    if not 0.0 <= saturation <= 2.0:
+        raise HTTPException(
+            status_code=400,
+            detail="Saturation must be between 0.0 and 2.0"
+        )
+    
+    # Parse form data to get the uploaded file (accept any field name)
+    try:
+        form = await request.form()
+    except Exception as e:
+        content_type = request.headers.get("content-type", "NOT SET")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Failed to parse form data",
+                "content_type_received": content_type,
+                "expected": "multipart/form-data",
+                "parsing_error": str(e),
+                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File', 4) Select your video file, 5) Make sure no Content-Type header is manually set"
+            }
+        )
+    
+    # Find the first file in the form data
+    video_file = None
+    field_name = None
+    available_fields = []
+    field_types = {}
+    
+    for key, value in form.items():
+        available_fields.append(key)
+        field_types[key] = type(value).__name__
+        
+        is_upload_file = (
+            isinstance(value, UploadFile) or 
+            type(value).__name__ == "UploadFile" or
+            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
+        )
+        
+        if is_upload_file:
+            video_file = value
+            field_name = key
+            break
+    
+    if not video_file:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "No file uploaded",
+                "found_fields": available_fields,
+                "field_types": field_types,
+                "help": "Make sure you're sending a file, not just text. In Postman, set the key type to 'File' (not 'Text'), then select your video file."
+            }
+        )
+    
+    # Save uploaded file
+    upload_dir = project_root / "temp_videos" / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    input_filename = video_file.filename or "video"
+    input_path = upload_dir / f"color_grade_{timestamp}_{input_filename}"
+    
+    try:
+        # Save uploaded video
+        with open(input_path, "wb") as f:
+            content = await video_file.read()
+            f.write(content)
+        
+        # Create output path
+        output_dir = project_root / "temp_videos" / "output" / "color_grading"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_filename = f"graded_{preset}_{timestamp}_{Path(input_filename).stem}.mp4"
+        output_path = output_dir / output_filename
+        
+        # Create job
+        job_id = job_manager.create_job(
+            job_type="color_grading",
+            parameters={
+                "input_path": str(input_path),
+                "output_path": str(output_path),
+                "original_filename": input_filename,
+                "preset": preset,
+                "brightness": brightness,
+                "contrast": contrast,
+                "saturation": saturation,
+                "was_random": use_random,  # Track if random was used
+            },
+            output_path=output_path,
+        )
+        
+        # Start background processing
+        background_tasks.add_task(
+            process_color_grading,
+            job_id=job_id,
+            input_path=str(input_path),
+            output_path=str(output_path),
+            preset=preset,
+            brightness=brightness,
+            contrast=contrast,
+            saturation=saturation,
+            job_manager=job_manager,
+        )
+        
+        # Return job_id immediately
+        response = {
+            "job_id": job_id,
+            "status": "pending",
+            "message": "Video upload successful. Color grading started.",
+            "status_url": f"/api/v1/jobs/{job_id}",
+            "download_url": f"/api/v1/videos/{job_id}/download",
+            "preset": preset,
+            "adjustments": {
+                "brightness": brightness,
+                "contrast": contrast,
+                "saturation": saturation,
+            },
+        }
+        
+        if use_random:
+            response["random"] = True
+            response["message"] += " (Random color grading applied)"
+        
+        return response
+    
+    except Exception as e:
+        # Clean up on error
+        if input_path.exists():
+            input_path.unlink()
+        raise HTTPException(status_code=500, detail=f"Error processing video: {str(e)}")
+
+
+async def process_color_grading(
+    job_id: str,
+    input_path: str,
+    output_path: str,
+    preset: str,
+    brightness: float,
+    contrast: float,
+    saturation: float,
+    job_manager: JobManager,
+):
+    """Background task to apply color grading to video."""
+    try:
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.PROCESSING,
+            progress=10,
+            message="Loading video file...",
+        )
+        
+        # Run color grading in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        processor = VideoProcessor()
+        
+        job_manager.update_job(
+            job_id,
+            progress=30,
+            message=f"Applying {preset} color grading...",
+        )
+        
+        # Process video (runs in thread pool)
+        await loop.run_in_executor(
+            None,
+            processor.apply_color_grading,
+            input_path,
+            output_path,
+            preset,
+            brightness,
+            contrast,
+            saturation,
+        )
+        
+        job_manager.update_job(
+            job_id,
+            progress=90,
+            message="Finalizing video...",
+        )
+        
+        # Verify output file exists
+        if not Path(output_path).exists():
+            raise Exception("Output file was not created")
+        
+        # Update job to completed
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.COMPLETED,
+            progress=100,
+            message=f"Color grading completed ({preset} preset)",
+            output_path=Path(output_path),
+        )
+    
+    except Exception as e:
+        error_msg = str(e)
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.FAILED,
+            error=error_msg,
+            message=f"Color grading failed: {error_msg}",
+        )
+    
+    finally:
+        # Clean up input file after processing
+        try:
+            if Path(input_path).exists():
+                Path(input_path).unlink()
+        except Exception:
+            pass

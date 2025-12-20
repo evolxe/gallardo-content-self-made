@@ -50,6 +50,9 @@ async def lifespan(app: FastAPI):
     scene_detection_dir = temp_dir / "output" / "scene_detection"
     scene_detection_dir.mkdir(parents=True, exist_ok=True)
     
+    color_grading_dir = temp_dir / "output" / "color_grading"
+    color_grading_dir.mkdir(parents=True, exist_ok=True)
+    
     yield
     
     # Shutdown
