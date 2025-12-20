@@ -14,6 +14,7 @@ project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from moviepy import VideoFileClip
+from moviepy import vfx
 from scenedetect import VideoManager, SceneManager
 from scenedetect.detectors import ContentDetector
 
@@ -308,4 +309,70 @@ class VideoProcessor:
             video.close()
             if 'graded_video' in locals():
                 graded_video.close()
+    
+    def crop_and_zoom_to_square(self, input_path: str, output_path: str, output_size: int = 1080):
+        """
+        Crop video to center 1:1 (square) aspect ratio and optionally resize.
+        
+        This function:
+        1. Crops the center square from the video (maintains original resolution of cropped area)
+        2. Optionally resizes to specified output_size x output_size
+        
+        Args:
+            input_path: Path to input video file
+            output_path: Path to save output video
+            output_size: Output square size in pixels (default: 1080x1080)
+                        Set to 0 or None to keep original cropped resolution
+            
+        Raises:
+            FileNotFoundError: If input file doesn't exist
+            Exception: If video processing fails
+        """
+        # Validate input file exists
+        if not Path(input_path).exists():
+            raise FileNotFoundError(f"Input video file not found: {input_path}")
+        
+        # Ensure output directory exists
+        output_dir = Path(output_path).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Load video
+        video = VideoFileClip(input_path)
+        
+        try:
+            # Get video dimensions
+            w, h = video.size
+            w, h = int(w), int(h)
+            
+            # Calculate center crop dimensions for 1:1 aspect ratio
+            # Take the shorter dimension as the square size
+            square_size = min(w, h)
+            
+            # Calculate crop coordinates (center crop)
+            crop_x = (w - square_size) // 2
+            crop_y = (h - square_size) // 2
+            
+            # Crop to center square: (x1, y1, x2, y2) - top-left and bottom-right corners
+            # Note: MoviePy v2 uses with_effects for crop
+            cropped_video = video.with_effects([
+                vfx.Crop(x1=crop_x, y1=crop_y, x2=crop_x + square_size, y2=crop_y + square_size)
+            ])
+            
+            # Resize to output_size if specified and different from cropped size
+            if output_size and output_size > 0 and output_size != square_size:
+                cropped_video = cropped_video.with_effects([
+                    vfx.Resize((output_size, output_size))
+                ])
+            
+            # Write output video
+            cropped_video.write_videofile(
+                output_path,
+                codec="libx264",
+            )
+            
+        finally:
+            # Clean up
+            video.close()
+            if 'cropped_video' in locals():
+                cropped_video.close()
 

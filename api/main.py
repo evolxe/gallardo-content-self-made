@@ -53,6 +53,9 @@ async def lifespan(app: FastAPI):
     color_grading_dir = temp_dir / "output" / "color_grading"
     color_grading_dir.mkdir(parents=True, exist_ok=True)
     
+    crop_zoom_dir = temp_dir / "output" / "crop_zoom"
+    crop_zoom_dir.mkdir(parents=True, exist_ok=True)
+    
     yield
     
     # Shutdown
