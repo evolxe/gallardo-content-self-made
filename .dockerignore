@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+temp_videos/
+logs/
+*.log
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+docs/
+*.md
+!README_DOCKER.md
+
+# Other services (not needed for video API)
+app.py
+sheets-gen/
+services/facebook/
+services/groundhogg.py
+templates/
+static/
+assets/
+fonts/
+mappings/
+config/
+systemd/
+
+# Credentials and config
+.env
+env
+*.json
+!requirements.txt
+!Video_Processing_API.postman_collection.json
+
+# Build artifacts
+*.bak
+*.backup
+
