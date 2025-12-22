@@ -248,6 +248,9 @@ class VideoProcessor:
             final_saturation = saturation if saturation != 1.0 else preset_config["saturation"]
             color_temp = preset_config["color_temperature"]
             
+            # Capture video reference before transformation to avoid recursion
+            source_video = video
+            
             # Apply color grading using numpy operations on each frame
             def apply_grading_to_frame(t):
                 """
@@ -260,8 +263,8 @@ class VideoProcessor:
                 Returns:
                     Processed frame as numpy array with dtype uint8
                 """
-                # Get the original frame at time t
-                frame = video.get_frame(t)
+                # Get the original frame at time t (use source_video to avoid recursion)
+                frame = source_video.get_frame(t)
                 
                 # Convert to float for processing
                 frame_float = frame.astype(np.float32) / 255.0
@@ -477,10 +480,20 @@ class VideoProcessor:
             
             # Clip both to match the shorter duration
             if video_duration > target_duration:
-                video = video.subclip(0, target_duration)
+                # MoviePy v2: use subclipped() or slicing syntax
+                try:
+                    video = video.subclipped(0, target_duration)
+                except AttributeError:
+                    # Fallback: use slicing syntax
+                    video = video[:target_duration]
             
             if audio_duration > target_duration:
-                audio = audio.subclip(0, target_duration)
+                # MoviePy v2: use subclipped() or slicing syntax
+                try:
+                    audio = audio.subclipped(0, target_duration)
+                except AttributeError:
+                    # Fallback: use slicing syntax
+                    audio = audio[:target_duration]
             
             # Set audio to video
             video_with_audio = video.with_audio(audio)
@@ -586,10 +599,20 @@ class VideoProcessor:
                 
                 # Clip both to match the shorter duration
                 if video_duration > target_duration:
-                    video = video.subclip(0, target_duration)
+                    # MoviePy v2: use subclipped() or slicing syntax
+                    try:
+                        video = video.subclipped(0, target_duration)
+                    except AttributeError:
+                        # Fallback: use slicing syntax
+                        video = video[:target_duration]
                 
                 if audio_duration > target_duration:
-                    audio_clip = audio_clip.subclip(0, target_duration)
+                    # MoviePy v2: use subclipped() or slicing syntax
+                    try:
+                        audio_clip = audio_clip.subclipped(0, target_duration)
+                    except AttributeError:
+                        # Fallback: use slicing syntax
+                        audio_clip = audio_clip[:target_duration]
                 
                 # Set audio to video
                 video = video.with_audio(audio_clip)
@@ -600,6 +623,10 @@ class VideoProcessor:
             
             # Step 2: Apply color grading
             if color_grading:
+                # Capture the current video reference BEFORE applying transformations
+                # This prevents circular references in the frame function
+                source_video = video
+                
                 # Use random preset if preset is "random"
                 if color_preset == "random":
                     preset, brightness, contrast, saturation = self.generate_random_color_grading()
@@ -626,9 +653,10 @@ class VideoProcessor:
                 final_saturation = saturation if saturation is not None else preset_config["saturation"]
                 color_temp = preset_config["color_temperature"]
                 
-                # Apply color grading
+                # Apply color grading - use source_video to avoid recursion
                 def apply_grading_to_frame(t):
-                    frame = video.get_frame(t)
+                    # Use source_video (captured before transformation) to get original frame
+                    frame = source_video.get_frame(t)
                     frame_float = frame.astype(np.float32) / 255.0
                     
                     # Apply brightness
