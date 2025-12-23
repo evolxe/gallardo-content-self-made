@@ -8,6 +8,7 @@ Usage:
 """
 
 import argparse
+import os
 import uvicorn
 from pathlib import Path
 import sys
@@ -31,8 +32,8 @@ def main():
     parser.add_argument(
         "--port",
         type=int,
-        default=8000,
-        help="Port to bind to (default: 8000)",
+        default=int(os.environ.get("PORT", 8000)),
+        help="Port to bind to (default: 8000 or PORT env var)",
     )
     parser.add_argument(
         "--reload",

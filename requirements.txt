@@ -11,4 +11,4 @@ uvicorn[standard]
 python-multipart
 pydantic
 scenedetect
-
+opencv-python
