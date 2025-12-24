@@ -51,10 +51,21 @@ class VideoProcessor:
             
             # Write output video (no audio track)
             # Since we used without_audio(), the clip has no audio stream
-            video_no_audio.write_videofile(
-                output_path,
-                codec="libx264",
-            )
+            try:
+                video_no_audio.write_videofile(
+                    output_path,
+                    codec="libx264",
+                    ffmpeg_params=["-preset", "medium", "-threads", "2"],  # Encoding speed/quality balance, limit CPU
+                    logger=None,  # Suppress verbose logging
+                )
+            except (OSError, IOError) as e:
+                if "Broken pipe" in str(e) or "errno 32" in str(e).lower():
+                    raise Exception(
+                        f"FFmpeg process was terminated (broken pipe). "
+                        f"This may be due to resource constraints (memory/CPU/disk). "
+                        f"Original error: {str(e)}"
+                    )
+                raise
             
         finally:
             # Clean up
@@ -302,10 +313,21 @@ class VideoProcessor:
             graded_video = video.with_updated_frame_function(apply_grading_to_frame)
             
             # Write output video
-            graded_video.write_videofile(
-                output_path,
-                codec="libx264",
-            )
+            try:
+                graded_video.write_videofile(
+                    output_path,
+                    codec="libx264",
+                    ffmpeg_params=["-preset", "medium", "-threads", "2"],  # Encoding speed/quality balance, limit CPU
+                    logger=None,  # Suppress verbose logging
+                )
+            except (OSError, IOError) as e:
+                if "Broken pipe" in str(e) or "errno 32" in str(e).lower():
+                    raise Exception(
+                        f"FFmpeg process was terminated (broken pipe). "
+                        f"This may be due to resource constraints (memory/CPU/disk). "
+                        f"Original error: {str(e)}"
+                    )
+                raise
             
         finally:
             # Clean up
@@ -368,10 +390,21 @@ class VideoProcessor:
                 ])
             
             # Write output video
-            cropped_video.write_videofile(
-                output_path,
-                codec="libx264",
-            )
+            try:
+                cropped_video.write_videofile(
+                    output_path,
+                    codec="libx264",
+                    ffmpeg_params=["-preset", "medium", "-threads", "2"],  # Encoding speed/quality balance, limit CPU
+                    logger=None,  # Suppress verbose logging
+                )
+            except (OSError, IOError) as e:
+                if "Broken pipe" in str(e) or "errno 32" in str(e).lower():
+                    raise Exception(
+                        f"FFmpeg process was terminated (broken pipe). "
+                        f"This may be due to resource constraints (memory/CPU/disk). "
+                        f"Original error: {str(e)}"
+                    )
+                raise
             
         finally:
             # Clean up
@@ -427,10 +460,28 @@ class VideoProcessor:
                 write_kwargs["bitrate"] = bitrate
             
             # Write output video (re-encoded)
-            video.write_videofile(
-                output_path,
-                **write_kwargs
-            )
+            # Add encoding parameters for robustness
+            write_kwargs.setdefault("logger", None)  # Suppress verbose logging
+            
+            # Add FFmpeg parameters for encoding efficiency and resource management
+            ffmpeg_params = ["-preset", "medium", "-threads", "2"]
+            if "ffmpeg_params" in write_kwargs:
+                ffmpeg_params.extend(write_kwargs["ffmpeg_params"])
+            write_kwargs["ffmpeg_params"] = ffmpeg_params
+            
+            try:
+                video.write_videofile(
+                    output_path,
+                    **write_kwargs
+                )
+            except (OSError, IOError) as e:
+                if "Broken pipe" in str(e) or "errno 32" in str(e).lower():
+                    raise Exception(
+                        f"FFmpeg process was terminated (broken pipe). "
+                        f"This may be due to resource constraints (memory/CPU/disk). "
+                        f"Original error: {str(e)}"
+                    )
+                raise
             
         finally:
             # Clean up
@@ -499,11 +550,22 @@ class VideoProcessor:
             video_with_audio = video.with_audio(audio)
             
             # Write output video with merged audio
-            video_with_audio.write_videofile(
-                output_path,
-                codec="libx264",
-                audio_codec="aac",
-            )
+            try:
+                video_with_audio.write_videofile(
+                    output_path,
+                    codec="libx264",
+                    audio_codec="aac",
+                    ffmpeg_params=["-preset", "medium", "-threads", "2"],  # Encoding speed/quality balance, limit CPU
+                    logger=None,  # Suppress verbose logging
+                )
+            except (OSError, IOError) as e:
+                if "Broken pipe" in str(e) or "errno 32" in str(e).lower():
+                    raise Exception(
+                        f"FFmpeg process was terminated (broken pipe). "
+                        f"This may be due to resource constraints (memory/CPU/disk). "
+                        f"Original error: {str(e)}"
+                    )
+                raise
             
         finally:
             # Clean up
@@ -707,6 +769,8 @@ class VideoProcessor:
             # Prepare write_videofile arguments
             write_kwargs = {
                 "codec": codec,
+                "logger": None,  # Suppress verbose logging
+                "ffmpeg_params": ["-preset", "medium", "-threads", "2"],  # Encoding speed/quality balance, limit CPU
             }
             
             # Add bitrate if specified
@@ -717,11 +781,21 @@ class VideoProcessor:
             if video.audio is not None:
                 write_kwargs["audio_codec"] = "aac"
             
-            # Write output video
-            video.write_videofile(
-                output_path,
-                **write_kwargs
-            )
+            # Write output video with error handling for broken pipe
+            try:
+                video.write_videofile(
+                    output_path,
+                    **write_kwargs
+                )
+            except (OSError, IOError) as e:
+                if "Broken pipe" in str(e) or "errno 32" in str(e).lower():
+                    raise Exception(
+                        f"FFmpeg process was terminated (broken pipe). "
+                        f"This may be due to resource constraints (memory/CPU/disk). "
+                        f"Try reducing video resolution, bitrate, or processing fewer operations at once. "
+                        f"Original error: {str(e)}"
+                    )
+                raise
             
         finally:
             # Clean up
