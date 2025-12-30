@@ -6,7 +6,7 @@ WORKDIR /app
 
 # Install system dependencies required for video processing
 # FFmpeg is required by MoviePy for video encoding/decoding
-# yt-dlp is installed as a system binary (following Python backend pattern)
+# This installs FFmpeg system-wide via apt-get (standard Linux package manager)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libsm6 \
@@ -41,7 +41,8 @@ RUN mkdir -p temp_videos/uploads \
     temp_videos/output/crop_zoom \
     temp_videos/output/reencode \
     temp_videos/output/merge_audio_video \
-    temp_videos/output/comprehensive
+    temp_videos/output/comprehensive \
+    temp_videos/output/ytdlp_downloads
 
 # Expose the API port
 EXPOSE 8000
