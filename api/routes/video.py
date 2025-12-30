@@ -1021,11 +1021,12 @@ async def process_color_grading(
 async def crop_and_zoom_video(
     background_tasks: BackgroundTasks,
     request: Request,
-    output_size: Optional[int] = Form(1080),
+    aspect_ratio: Optional[str] = Form(None),
+    background_color: Optional[str] = Form(None),
     video_url: Optional[str] = Form(None),
 ):
     """
-    Upload a video (or provide URL) and crop it to center 1:1 (square) aspect ratio.
+    Upload a video (or provide URL) and crop it to any aspect ratio, outputting as 9:16.
     
     Either:
     - Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
@@ -1034,20 +1035,56 @@ async def crop_and_zoom_video(
     The file/request must be sent as multipart/form-data.
     
     Parameters:
-    - output_size: Output square size in pixels (default: 1080, creates 1080x1080 video)
-                   Set to 0 to keep original cropped resolution
+    - aspect_ratio: Desired crop aspect ratio in format "W:H" (e.g., "16:9", "1:1", "4:3", "21:9")
+                    Default: "1:1" (square) if not provided
+    - background_color: Background color for padding when aspect ratio is not 9:16
+                        Can be hex format (e.g., "#000000" for black, "#FFFFFF" for white)
+                        or named colors (black, white, red, green, blue, yellow, cyan, magenta, gray)
+                        Default: Random color if not provided
+    
+    Note: Output is ALWAYS 9:16 (1080x1920). If the cropped aspect ratio is not 9:16,
+    the video will be scaled to fit and padded with the background color.
     
     Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
     When completed, download the video via GET /api/v1/videos/{job_id}/download
     """
     job_manager: JobManager = get_job_manager(request)
     
-    # Validate output_size
-    if output_size is not None and output_size < 0:
+    # Default aspect_ratio to 1:1 if not provided
+    if not aspect_ratio:
+        aspect_ratio = "1:1"
+    
+    # Validate aspect_ratio format
+    try:
+        parts = aspect_ratio.split(":")
+        if len(parts) != 2:
+            raise ValueError("Aspect ratio must be in format 'W:H'")
+        float(parts[0])
+        float(parts[1])
+    except (ValueError, IndexError):
         raise HTTPException(
             status_code=400,
-            detail="output_size must be 0 or greater (0 = keep original cropped resolution)"
+            detail=f"Invalid aspect_ratio format '{aspect_ratio}'. Use format 'W:H' (e.g., '16:9', '1:1')"
         )
+    
+    # Pick random background color if not provided
+    if not background_color:
+        import random
+        colors = [
+            "#000000",  # black
+            "#FFFFFF",  # white
+            "#FF0000",  # red
+            "#00FF00",  # green
+            "#0000FF",  # blue
+            "#FFFF00",  # yellow
+            "#00FFFF",  # cyan
+            "#FF00FF",  # magenta
+            "#808080",  # gray
+            "#FFA500",  # orange
+            "#800080",  # purple
+            "#FFC0CB",  # pink
+        ]
+        background_color = random.choice(colors)
     
     # Parse form data
     try:
@@ -1078,8 +1115,9 @@ async def crop_and_zoom_video(
         output_dir = project_root / "temp_videos" / "output" / "crop_zoom"
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        size_suffix = f"{output_size}x{output_size}" if output_size else "original"
-        output_filename = f"square_{size_suffix}_{timestamp}_{Path(input_filename).stem}.mp4"
+        # Sanitize aspect_ratio for filename
+        aspect_safe = aspect_ratio.replace(":", "_")
+        output_filename = f"crop_{aspect_safe}_9x16_{timestamp}_{Path(input_filename).stem}.mp4"
         output_path = output_dir / output_filename
         
         # Create job
@@ -1089,7 +1127,8 @@ async def crop_and_zoom_video(
                 "input_path": str(input_path),
                 "output_path": str(output_path),
                 "original_filename": input_filename,
-                "output_size": output_size,
+                "aspect_ratio": aspect_ratio,
+                "background_color": background_color,
                 "video_url": video_url if video_url else None,
             },
             output_path=output_path,
@@ -1101,7 +1140,8 @@ async def crop_and_zoom_video(
             job_id=job_id,
             input_path=str(input_path),
             output_path=str(output_path),
-            output_size=output_size,
+            aspect_ratio=aspect_ratio,
+            background_color=background_color,
             job_manager=job_manager,
         )
         
@@ -1112,7 +1152,9 @@ async def crop_and_zoom_video(
             "message": "Video upload successful. Crop and zoom started.",
             "status_url": f"/api/v1/jobs/{job_id}",
             "download_url": f"/api/v1/videos/{job_id}/download",
-            "output_size": output_size,
+            "aspect_ratio": aspect_ratio,
+            "background_color": background_color,
+            "output_format": "9:16 (1080x1920)",
         }
     
     except Exception as e:
@@ -1126,10 +1168,11 @@ async def process_crop_and_zoom(
     job_id: str,
     input_path: str,
     output_path: str,
-    output_size: int,
+    aspect_ratio: str,
+    background_color: str,
     job_manager: JobManager,
 ):
-    """Background task to crop and zoom video to square."""
+    """Background task to crop video to aspect ratio and output as 9:16."""
     try:
         job_manager.update_job(
             job_id,
@@ -1145,16 +1188,19 @@ async def process_crop_and_zoom(
         job_manager.update_job(
             job_id,
             progress=30,
-            message="Cropping to center square...",
+            message=f"Processing video: cropping to {aspect_ratio}, scaling, and encoding to 9:16 (this may take several minutes)...",
         )
         
         # Process video (runs in thread pool)
+        # Note: This is a long-running operation that can take several minutes
+        # The write_videofile call is CPU-intensive and does not provide progress updates
         await loop.run_in_executor(
             None,
-            processor.crop_and_zoom_to_square,
+            processor.crop_to_aspect_ratio_and_pad_to_9_16,
             input_path,
             output_path,
-            output_size,
+            aspect_ratio,
+            background_color,
         )
         
         job_manager.update_job(
@@ -1168,12 +1214,11 @@ async def process_crop_and_zoom(
             raise Exception("Output file was not created")
         
         # Update job to completed
-        size_info = f"{output_size}x{output_size}" if output_size else "original size"
         job_manager.update_job(
             job_id,
             status=JobStatus.COMPLETED,
             progress=100,
-            message=f"Crop and zoom completed ({size_info})",
+            message=f"Crop completed (cropped to {aspect_ratio}, output as 9:16)",
             output_path=Path(output_path),
         )
     
