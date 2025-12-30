@@ -13,7 +13,7 @@ import random
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from moviepy import VideoFileClip, AudioFileClip, CompositeAudioClip
+from moviepy import VideoFileClip, AudioFileClip, CompositeAudioClip, ImageClip, CompositeVideoClip
 from moviepy import vfx
 from scenedetect import VideoManager, SceneManager
 from scenedetect.detectors import ContentDetector
@@ -411,6 +411,191 @@ class VideoProcessor:
             video.close()
             if 'cropped_video' in locals():
                 cropped_video.close()
+    
+    def crop_to_aspect_ratio_and_pad_to_9_16(
+        self, 
+        input_path: str, 
+        output_path: str, 
+        aspect_ratio: str = "1:1",
+        background_color: str = "#000000",
+        output_width: int = 1080
+    ):
+        """
+        Crop video to specified aspect ratio and output as 9:16 with background padding.
+        
+        This function:
+        1. Crops the video to the desired aspect ratio (centered)
+        2. Scales the cropped video to fit into a 9:16 frame
+        3. Adds background padding if needed to fill the 9:16 frame
+        4. Outputs as 9:16 (1080x1920 by default)
+        
+        Args:
+            input_path: Path to input video file
+            output_path: Path to save output video
+            aspect_ratio: Desired crop aspect ratio in format "W:H" (e.g., "16:9", "1:1", "4:3")
+            background_color: Background color for padding (hex format like "#000000" or named colors)
+            output_width: Output width in pixels (default: 1080, creates 1080x1920 9:16 video)
+            
+        Raises:
+            FileNotFoundError: If input file doesn't exist
+            ValueError: If aspect ratio format is invalid
+            Exception: If video processing fails
+        """
+        # Validate input file exists
+        if not Path(input_path).exists():
+            raise FileNotFoundError(f"Input video file not found: {input_path}")
+        
+        # Parse aspect ratio
+        try:
+            parts = aspect_ratio.split(":")
+            if len(parts) != 2:
+                raise ValueError("Aspect ratio must be in format 'W:H' (e.g., '16:9')")
+            aspect_w = float(parts[0])
+            aspect_h = float(parts[1])
+            if aspect_w <= 0 or aspect_h <= 0:
+                raise ValueError("Aspect ratio values must be positive")
+            target_aspect = aspect_w / aspect_h
+        except (ValueError, ZeroDivisionError) as e:
+            raise ValueError(f"Invalid aspect ratio format '{aspect_ratio}': {str(e)}")
+        
+        # Parse background color
+        def parse_color(color_str: str) -> Tuple[int, int, int]:
+            """Parse color string to RGB tuple."""
+            color_str = color_str.strip().lower()
+            
+            # Named colors
+            named_colors = {
+                "black": (0, 0, 0),
+                "white": (255, 255, 255),
+                "red": (255, 0, 0),
+                "green": (0, 255, 0),
+                "blue": (0, 0, 255),
+                "yellow": (255, 255, 0),
+                "cyan": (0, 255, 255),
+                "magenta": (255, 0, 255),
+                "gray": (128, 128, 128),
+                "grey": (128, 128, 128),
+            }
+            
+            if color_str in named_colors:
+                return named_colors[color_str]
+            
+            # Hex color
+            if color_str.startswith("#"):
+                hex_color = color_str[1:]
+                if len(hex_color) == 6:
+                    try:
+                        r = int(hex_color[0:2], 16)
+                        g = int(hex_color[2:4], 16)
+                        b = int(hex_color[4:6], 16)
+                        return (r, g, b)
+                    except ValueError:
+                        pass
+            
+            raise ValueError(f"Invalid color format: {color_str}. Use hex (#RRGGBB) or named color.")
+        
+        bg_color_rgb = parse_color(background_color)
+        
+        # Calculate 9:16 output dimensions
+        output_height = int(output_width * 16 / 9)  # 9:16 aspect ratio
+        output_aspect = 9 / 16  # 0.5625
+        
+        # Ensure output directory exists
+        output_dir = Path(output_path).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Load video
+        video = VideoFileClip(input_path)
+        
+        try:
+            # Get video dimensions
+            w, h = video.size
+            w, h = int(w), int(h)
+            video_aspect = w / h
+            
+            # Calculate crop dimensions for desired aspect ratio
+            if video_aspect > target_aspect:
+                # Video is wider than target - crop width
+                crop_h = h
+                crop_w = int(h * target_aspect)
+                crop_x = (w - crop_w) // 2
+                crop_y = 0
+            else:
+                # Video is taller than target - crop height
+                crop_w = w
+                crop_h = int(w / target_aspect)
+                crop_x = 0
+                crop_y = (h - crop_h) // 2
+            
+            # Crop to desired aspect ratio
+            cropped_video = video.with_effects([
+                vfx.Crop(x1=crop_x, y1=crop_y, x2=crop_x + crop_w, y2=crop_y + crop_h)
+            ])
+            
+            # Calculate scale to fit cropped video into 9:16 frame
+            # We want to fit the cropped video inside the 9:16 frame while maintaining aspect ratio
+            cropped_aspect = target_aspect  # After crop, this is the aspect ratio
+            
+            # Calculate scale factors for both dimensions
+            scale_w = output_width / crop_w
+            scale_h = output_height / crop_h
+            
+            # Use the smaller scale to ensure the video fits entirely within the frame
+            scale = min(scale_w, scale_h)
+            scaled_w = int(crop_w * scale)
+            scaled_h = int(crop_h * scale)
+            
+            # Scale the cropped video
+            scaled_video = cropped_video.with_effects([
+                vfx.Resize((scaled_w, scaled_h))
+            ])
+            
+            # Create background (9:16 frame with background color)
+            bg_array = np.full((output_height, output_width, 3), bg_color_rgb, dtype=np.uint8)
+            background = ImageClip(bg_array).with_duration(video.duration)
+            
+            # Composite: place scaled video on background (centered)
+            final_video = CompositeVideoClip(
+                [background, scaled_video.with_position("center")],
+                size=(output_width, output_height)
+            )
+            
+            # Preserve audio if present
+            if video.audio is not None:
+                final_video = final_video.with_audio(video.audio)
+            
+            # Write output video
+            # Note: This is a long-running operation that can take several minutes
+            # FFmpeg encoding at 1080x1920 is CPU-intensive and does not provide progress updates
+            # Using "-threads", "0" to utilize all available CPU cores for faster processing
+            try:
+                final_video.write_videofile(
+                    output_path,
+                    codec="libx264",
+                    ffmpeg_params=["-preset", "medium", "-threads", "0"],  # Use all available cores for faster encoding
+                    logger=None,  # Suppress verbose logging
+                    audio_codec="aac" if video.audio is not None else None,
+                )
+            except (OSError, IOError) as e:
+                if "Broken pipe" in str(e) or "errno 32" in str(e).lower():
+                    raise Exception(
+                        f"FFmpeg process was terminated (broken pipe). "
+                        f"This may be due to resource constraints (memory/CPU/disk). "
+                        f"Original error: {str(e)}"
+                    )
+                raise
+            
+        finally:
+            # Clean up
+            video.close()
+            if 'cropped_video' in locals():
+                cropped_video.close()
+            if 'scaled_video' in locals():
+                scaled_video.close()
+            if 'final_video' in locals():
+                final_video.close()
+            if 'background' in locals():
+                background.close()
     
     def reencode_video(
         self,

@@ -6,13 +6,19 @@ WORKDIR /app
 
 # Install system dependencies required for video processing
 # FFmpeg is required by MoviePy for video encoding/decoding
+# This installs FFmpeg system-wide via apt-get (standard Linux package manager)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libsm6 \
     libxext6 \
     libxrender-dev \
     libgomp1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install yt-dlp as a system binary (following Python backend pattern - subprocess calls)
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
+    && chmod a+rx /usr/local/bin/yt-dlp
 
 # Copy requirements first for better Docker layer caching
 COPY requirements.txt .
@@ -35,7 +41,8 @@ RUN mkdir -p temp_videos/uploads \
     temp_videos/output/crop_zoom \
     temp_videos/output/reencode \
     temp_videos/output/merge_audio_video \
-    temp_videos/output/comprehensive
+    temp_videos/output/comprehensive \
+    temp_videos/output/ytdlp_downloads
 
 # Expose the API port
 EXPOSE 8000

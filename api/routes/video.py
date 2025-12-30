@@ -6,7 +6,7 @@ import os
 import sys
 import asyncio
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 from datetime import datetime
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request, BackgroundTasks, Form
@@ -18,6 +18,7 @@ sys.path.insert(0, str(project_root))
 
 from api.core.job_manager import JobManager, JobStatus
 from api.services.video_processor import VideoProcessor
+from api.services.ytdlp_service import YTDLPService
 
 router = APIRouter()
 
@@ -27,28 +28,150 @@ def get_job_manager(request: Request) -> JobManager:
     return request.app.state.job_manager
 
 
+async def get_video_input(
+    form: dict,
+    video_url: Optional[str] = None,
+    upload_dir: Optional[Path] = None,
+    prefix: str = "video"
+) -> Tuple[Path, str]:
+    """
+    Helper function to get video input from either URL or file upload.
+    
+    Args:
+        form: Form data dictionary
+        video_url: Optional URL to download video from
+        upload_dir: Directory to save uploaded/downloaded videos
+        prefix: Prefix for the saved filename
+        
+    Returns:
+        Tuple of (local_file_path, original_filename)
+        
+    Raises:
+        HTTPException: If neither URL nor file is provided, or both are provided
+    """
+    if upload_dir is None:
+        upload_dir = project_root / "temp_videos" / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    
+    # Check if both URL and file are provided
+    video_file = None
+    for key, value in form.items():
+        is_upload_file = (
+            isinstance(value, UploadFile) or 
+            type(value).__name__ == "UploadFile" or
+            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
+        )
+        if is_upload_file:
+            video_file = value
+            break
+    
+    if video_url and video_file:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Both video_url and file upload provided",
+                "help": "Provide either a video_url parameter OR upload a file, not both"
+            }
+        )
+    
+    if video_url:
+        # Download from URL using yt-dlp
+        try:
+            # Create output directory for downloaded video
+            download_dir = upload_dir / "url_downloads"
+            download_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Initialize yt-dlp service
+            ytdlp_service = YTDLPService(output_dir=download_dir)
+            
+            # Download video synchronously (we're in an async function, but download_video is sync)
+            # We'll use asyncio to run it in executor
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                ytdlp_service.download_video,
+                video_url,
+                None,  # output_filename - let it use default
+                "best",  # quality
+                "mp4",  # format_type
+                False,  # audio_only
+            )
+            
+            downloaded_path = Path(result["output_path"])
+            if not downloaded_path.exists():
+                raise Exception("Downloaded file not found")
+            
+            # Generate a standardized filename with prefix
+            original_filename = result.get("filename", "downloaded_video")
+            file_extension = downloaded_path.suffix
+            new_filename = f"{prefix}_{timestamp}_{Path(original_filename).stem}{file_extension}"
+            input_path = upload_dir / new_filename
+            
+            # Move/copy the downloaded file to uploads directory with standardized name
+            import shutil
+            shutil.move(str(downloaded_path), str(input_path))
+            
+            return input_path, original_filename
+            
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Failed to download video from URL: {str(e)}",
+                    "url": video_url,
+                }
+            )
+    
+    elif video_file:
+        # Handle file upload
+        input_filename = video_file.filename or "video"
+        input_path = upload_dir / f"{prefix}_{timestamp}_{input_filename}"
+        
+        # Save uploaded video
+        content = await video_file.read()
+        with open(input_path, "wb") as f:
+            f.write(content)
+        
+        return input_path, input_filename
+    
+    else:
+        # Neither URL nor file provided
+        available_fields = list(form.keys())
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "No video input provided",
+                "help": "Either provide a video_url parameter OR upload a video file",
+                "available_fields": available_fields,
+            }
+        )
+
+
 @router.post("/videos/remove-audio")
 async def remove_audio_from_video(
     background_tasks: BackgroundTasks,
     request: Request,
+    video_url: Optional[str] = Form(None),
 ):
     """
-    Upload a video and remove its audio track.
+    Upload a video (or provide URL) and remove its audio track.
     
-    Accepts a file upload with any field name (e.g., 'video', 'file', 'upload', etc.).
-    The file must be sent as multipart/form-data.
+    Either:
+    - Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
+    - OR provide a video_url parameter with a URL to download from (YouTube, Instagram, etc.)
+    
+    The file/request must be sent as multipart/form-data.
     
     Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
     """
     job_manager: JobManager = get_job_manager(request)
     
-    # Parse form data to get the uploaded file (accept any field name)
-    # FastAPI will automatically handle multipart/form-data
-    # We don't check Content-Type upfront because Postman/FastAPI handles it automatically
+    # Parse form data
     try:
         form = await request.form()
     except Exception as e:
-        # Provide helpful error message with debugging info
         content_type = request.headers.get("content-type", "NOT SET")
         raise HTTPException(
             status_code=400,
@@ -57,60 +180,20 @@ async def remove_audio_from_video(
                 "content_type_received": content_type,
                 "expected": "multipart/form-data",
                 "parsing_error": str(e),
-                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File', 4) Select your video file, 5) Make sure no Content-Type header is manually set"
+                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File' OR add video_url parameter, 4) Make sure no Content-Type header is manually set"
             }
         )
-    
-    # Find the first file in the form data
-    video_file = None
-    field_name = None
-    available_fields = []
-    field_types = {}
-    
-    # Iterate through form data to find UploadFile
-    for key, value in form.items():
-        available_fields.append(key)
-        field_types[key] = type(value).__name__
-        
-        # Check if it's an UploadFile - use multiple checks to be robust
-        is_upload_file = (
-            isinstance(value, UploadFile) or 
-            type(value).__name__ == "UploadFile" or
-            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
-        )
-        
-        if is_upload_file:
-            video_file = value
-            field_name = key
-            break
-    
-    if not video_file:
-        # Provide helpful error message with debugging info
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "No file uploaded",
-                "found_fields": available_fields,
-                "field_types": field_types,
-                "help": "Make sure you're sending a file, not just text. In Postman, set the key type to 'File' (not 'Text'), then select your video file."
-            }
-        )
-    
-    # Save uploaded file
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    input_filename = video_file.filename or "video"
-    input_path = upload_dir / f"input_{timestamp}_{input_filename}"
     
     try:
-        # Save uploaded video
-        with open(input_path, "wb") as f:
-            content = await video_file.read()
-            f.write(content)
+        # Get video input (from URL or file upload)
+        input_path, input_filename = await get_video_input(
+            form=form,
+            video_url=video_url,
+            prefix="input"
+        )
         
         # Create output path - organized by use case
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         output_dir = project_root / "temp_videos" / "output" / "audio_removal"
         output_dir.mkdir(parents=True, exist_ok=True)
         output_filename = f"no_audio_{timestamp}_{Path(input_filename).stem}.mp4"
@@ -123,6 +206,7 @@ async def remove_audio_from_video(
                 "input_path": str(input_path),
                 "output_path": str(output_path),
                 "original_filename": input_filename,
+                "video_url": video_url if video_url else None,
             },
             output_path=output_path,
         )
@@ -228,16 +312,21 @@ async def process_video_remove_audio(
 async def detect_scenes_in_video(
     background_tasks: BackgroundTasks,
     request: Request,
+    video_url: Optional[str] = Form(None),
 ):
     """
-    Upload a video and detect scene cuts.
+    Upload a video (or provide URL) and detect scene cuts.
+    
+    Either:
+    - Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
+    - OR provide a video_url parameter with a URL to download from (YouTube, Instagram, etc.)
     
     Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
     When completed, the job result will contain scene information.
     """
     job_manager: JobManager = get_job_manager(request)
     
-    # Parse form data to get the uploaded file (accept any field name)
+    # Parse form data
     try:
         form = await request.form()
     except Exception as e:
@@ -249,57 +338,20 @@ async def detect_scenes_in_video(
                 "content_type_received": content_type,
                 "expected": "multipart/form-data",
                 "parsing_error": str(e),
-                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File', 4) Select your video file, 5) Make sure no Content-Type header is manually set"
+                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File' OR add video_url parameter"
             }
         )
-    
-    # Find the first file in the form data
-    video_file = None
-    field_name = None
-    available_fields = []
-    field_types = {}
-    
-    for key, value in form.items():
-        available_fields.append(key)
-        field_types[key] = type(value).__name__
-        
-        is_upload_file = (
-            isinstance(value, UploadFile) or 
-            type(value).__name__ == "UploadFile" or
-            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
-        )
-        
-        if is_upload_file:
-            video_file = value
-            field_name = key
-            break
-    
-    if not video_file:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "No file uploaded",
-                "found_fields": available_fields,
-                "field_types": field_types,
-                "help": "Make sure you're sending a file, not just text. In Postman, set the key type to 'File' (not 'Text'), then select your video file."
-            }
-        )
-    
-    # Save uploaded file - organized by use case
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    input_filename = video_file.filename or "video"
-    input_path = upload_dir / f"scene_detection_{timestamp}_{input_filename}"
     
     try:
-        # Save uploaded video
-        with open(input_path, "wb") as f:
-            content = await video_file.read()
-            f.write(content)
+        # Get video input (from URL or file upload)
+        input_path, input_filename = await get_video_input(
+            form=form,
+            video_url=video_url,
+            prefix="scene_detection"
+        )
         
         # Create output path for scene data (JSON file)
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         output_dir = project_root / "temp_videos" / "output" / "scene_detection"
         output_dir.mkdir(parents=True, exist_ok=True)
         output_filename = f"scenes_{timestamp}_{Path(input_filename).stem}.json"
@@ -312,6 +364,7 @@ async def detect_scenes_in_video(
                 "input_path": str(input_path),
                 "output_path": str(output_path),
                 "original_filename": input_filename,
+                "video_url": video_url if video_url else None,
             },
             output_path=output_path,
         )
@@ -438,7 +491,7 @@ async def download_video(job_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Job not found")
     
     # Allow download for video output jobs
-    if job["type"] not in ["remove_audio", "color_grading", "crop_zoom", "reencode", "merge_audio_video", "comprehensive"]:
+    if job["type"] not in ["remove_audio", "color_grading", "crop_zoom", "reencode", "merge_audio_video", "comprehensive", "ytdlp_download"]:
         raise HTTPException(
             status_code=400,
             detail=f"This endpoint is for video downloads only. Job type: {job['type']}",
@@ -562,6 +615,165 @@ async def download_scene_data(job_id: str, request: Request):
     )
 
 
+@router.post("/videos/download-from-url")
+async def download_video_from_url(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    url: str = Form(...),
+    quality: Optional[str] = Form("best"),
+    format_type: Optional[str] = Form("mp4"),
+    audio_only: Optional[bool] = Form(False),
+    output_filename: Optional[str] = Form(None),
+):
+    """
+    Download a video from a URL using yt-dlp (subprocess-based implementation).
+    
+    Supports YouTube, Vimeo, and other platforms supported by yt-dlp.
+    
+    Parameters (form-data):
+    - url: URL of the video to download (required)
+    - quality: Video quality ('best', 'worst', '720p', '1080p', etc.) - default: 'best'
+    - format_type: Output format ('mp4', 'webm', etc.) - default: 'mp4'
+    - audio_only: If True, download audio only (as mp3) - default: False
+    - output_filename: Optional custom filename (without extension)
+    
+    Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
+    When completed, download the video via GET /api/v1/videos/{job_id}/download
+    """
+    job_manager: JobManager = get_job_manager(request)
+    
+    # Validate URL
+    if not url or not url.strip():
+        raise HTTPException(status_code=400, detail="URL parameter is required")
+    
+    # Create job
+    job_id = job_manager.create_job(
+        job_type="ytdlp_download",
+        parameters={
+            "url": url,
+            "quality": quality,
+            "format_type": format_type,
+            "audio_only": audio_only,
+            "output_filename": output_filename,
+        },
+    )
+    
+    # Prepare output directory
+    output_dir = project_root / "temp_videos" / "output" / "ytdlp_downloads"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate output filename
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if output_filename:
+        safe_filename = "".join(c for c in output_filename if c.isalnum() or c in (' ', '-', '_')).strip()
+        output_path = output_dir / f"{safe_filename}.{format_type if not audio_only else 'mp3'}"
+    else:
+        output_path = output_dir / f"download_{timestamp}.{format_type if not audio_only else 'mp3'}"
+    
+    # Start background processing
+    background_tasks.add_task(
+        process_ytdlp_download,
+        job_id=job_id,
+        url=url,
+        output_path=str(output_path),
+        quality=quality,
+        format_type=format_type,
+        audio_only=audio_only,
+        output_filename=output_filename,
+        job_manager=job_manager,
+    )
+    
+    # Return job_id immediately
+    return {
+        "job_id": job_id,
+        "status": "pending",
+        "message": "Download started",
+        "status_url": f"/api/v1/jobs/{job_id}",
+        "download_url": f"/api/v1/videos/{job_id}/download",
+    }
+
+
+async def process_ytdlp_download(
+    job_id: str,
+    url: str,
+    output_path: str,
+    quality: str,
+    format_type: str,
+    audio_only: bool,
+    output_filename: Optional[str],
+    job_manager: JobManager,
+):
+    """
+    Background task to download video using yt-dlp.
+    """
+    try:
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.PROCESSING,
+            progress=10,
+            message="Initializing download...",
+        )
+        
+        # Initialize yt-dlp service
+        output_dir = Path(output_path).parent
+        ytdlp_service = YTDLPService(output_dir=output_dir)
+        
+        job_manager.update_job(
+            job_id,
+            progress=20,
+            message="Connecting to video source...",
+        )
+        
+        # Run download in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        
+        job_manager.update_job(
+            job_id,
+            progress=30,
+            message="Downloading video...",
+        )
+        
+        # Download video (runs in thread pool)
+        result = await loop.run_in_executor(
+            None,
+            ytdlp_service.download_video,
+            url,
+            output_filename,
+            quality,
+            format_type,
+            audio_only,
+        )
+        
+        job_manager.update_job(
+            job_id,
+            progress=90,
+            message="Download completed, finalizing...",
+        )
+        
+        # Verify output file exists
+        actual_output_path = Path(result["output_path"])
+        if not actual_output_path.exists():
+            raise Exception("Downloaded file was not found")
+        
+        # Update job to completed
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.COMPLETED,
+            progress=100,
+            message="Download completed successfully",
+            output_path=actual_output_path,
+        )
+    
+    except Exception as e:
+        error_msg = str(e)
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.FAILED,
+            error=error_msg,
+            message=f"Download failed: {error_msg}",
+        )
+
+
 @router.post("/videos/color-grade")
 async def color_grade_video(
     background_tasks: BackgroundTasks,
@@ -570,12 +782,16 @@ async def color_grade_video(
     brightness: Optional[float] = Form(None),
     contrast: Optional[float] = Form(None),
     saturation: Optional[float] = Form(None),
+    video_url: Optional[str] = Form(None),
 ):
     """
-    Upload a video and apply color grading.
+    Upload a video (or provide URL) and apply color grading.
     
-    Accepts a file upload with any field name (e.g., 'video', 'file', 'upload', etc.).
-    The file must be sent as multipart/form-data.
+    Either:
+    - Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
+    - OR provide a video_url parameter with a URL to download from (YouTube, Instagram, etc.)
+    
+    The file/request must be sent as multipart/form-data.
     
     Parameters:
     - preset: Color grading preset (cinematic, warm, cool, vintage, vivid, bw, natural, random)
@@ -634,7 +850,7 @@ async def color_grade_video(
             detail="Saturation must be between 0.0 and 2.0"
         )
     
-    # Parse form data to get the uploaded file (accept any field name)
+    # Parse form data
     try:
         form = await request.form()
     except Exception as e:
@@ -646,57 +862,20 @@ async def color_grade_video(
                 "content_type_received": content_type,
                 "expected": "multipart/form-data",
                 "parsing_error": str(e),
-                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File', 4) Select your video file, 5) Make sure no Content-Type header is manually set"
+                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File' OR add video_url parameter"
             }
         )
-    
-    # Find the first file in the form data
-    video_file = None
-    field_name = None
-    available_fields = []
-    field_types = {}
-    
-    for key, value in form.items():
-        available_fields.append(key)
-        field_types[key] = type(value).__name__
-        
-        is_upload_file = (
-            isinstance(value, UploadFile) or 
-            type(value).__name__ == "UploadFile" or
-            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
-        )
-        
-        if is_upload_file:
-            video_file = value
-            field_name = key
-            break
-    
-    if not video_file:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "No file uploaded",
-                "found_fields": available_fields,
-                "field_types": field_types,
-                "help": "Make sure you're sending a file, not just text. In Postman, set the key type to 'File' (not 'Text'), then select your video file."
-            }
-        )
-    
-    # Save uploaded file
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    input_filename = video_file.filename or "video"
-    input_path = upload_dir / f"color_grade_{timestamp}_{input_filename}"
     
     try:
-        # Save uploaded video
-        with open(input_path, "wb") as f:
-            content = await video_file.read()
-            f.write(content)
+        # Get video input (from URL or file upload)
+        input_path, input_filename = await get_video_input(
+            form=form,
+            video_url=video_url,
+            prefix="color_grade"
+        )
         
         # Create output path
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         output_dir = project_root / "temp_videos" / "output" / "color_grading"
         output_dir.mkdir(parents=True, exist_ok=True)
         output_filename = f"graded_{preset}_{timestamp}_{Path(input_filename).stem}.mp4"
@@ -714,6 +893,7 @@ async def color_grade_video(
                 "contrast": contrast,
                 "saturation": saturation,
                 "was_random": use_random,  # Track if random was used
+                "video_url": video_url if video_url else None,
             },
             output_path=output_path,
         )
@@ -841,31 +1021,72 @@ async def process_color_grading(
 async def crop_and_zoom_video(
     background_tasks: BackgroundTasks,
     request: Request,
-    output_size: Optional[int] = Form(1080),
+    aspect_ratio: Optional[str] = Form(None),
+    background_color: Optional[str] = Form(None),
+    video_url: Optional[str] = Form(None),
 ):
     """
-    Upload a video and crop it to center 1:1 (square) aspect ratio.
+    Upload a video (or provide URL) and crop it to any aspect ratio, outputting as 9:16.
     
-    Accepts a file upload with any field name (e.g., 'video', 'file', 'upload', etc.).
-    The file must be sent as multipart/form-data.
+    Either:
+    - Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
+    - OR provide a video_url parameter with a URL to download from (YouTube, Instagram, etc.)
+    
+    The file/request must be sent as multipart/form-data.
     
     Parameters:
-    - output_size: Output square size in pixels (default: 1080, creates 1080x1080 video)
-                   Set to 0 to keep original cropped resolution
+    - aspect_ratio: Desired crop aspect ratio in format "W:H" (e.g., "16:9", "1:1", "4:3", "21:9")
+                    Default: "1:1" (square) if not provided
+    - background_color: Background color for padding when aspect ratio is not 9:16
+                        Can be hex format (e.g., "#000000" for black, "#FFFFFF" for white)
+                        or named colors (black, white, red, green, blue, yellow, cyan, magenta, gray)
+                        Default: Random color if not provided
+    
+    Note: Output is ALWAYS 9:16 (1080x1920). If the cropped aspect ratio is not 9:16,
+    the video will be scaled to fit and padded with the background color.
     
     Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
     When completed, download the video via GET /api/v1/videos/{job_id}/download
     """
     job_manager: JobManager = get_job_manager(request)
     
-    # Validate output_size
-    if output_size is not None and output_size < 0:
+    # Default aspect_ratio to 1:1 if not provided
+    if not aspect_ratio:
+        aspect_ratio = "1:1"
+    
+    # Validate aspect_ratio format
+    try:
+        parts = aspect_ratio.split(":")
+        if len(parts) != 2:
+            raise ValueError("Aspect ratio must be in format 'W:H'")
+        float(parts[0])
+        float(parts[1])
+    except (ValueError, IndexError):
         raise HTTPException(
             status_code=400,
-            detail="output_size must be 0 or greater (0 = keep original cropped resolution)"
+            detail=f"Invalid aspect_ratio format '{aspect_ratio}'. Use format 'W:H' (e.g., '16:9', '1:1')"
         )
     
-    # Parse form data to get the uploaded file (accept any field name)
+    # Pick random background color if not provided
+    if not background_color:
+        import random
+        colors = [
+            "#000000",  # black
+            "#FFFFFF",  # white
+            "#FF0000",  # red
+            "#00FF00",  # green
+            "#0000FF",  # blue
+            "#FFFF00",  # yellow
+            "#00FFFF",  # cyan
+            "#FF00FF",  # magenta
+            "#808080",  # gray
+            "#FFA500",  # orange
+            "#800080",  # purple
+            "#FFC0CB",  # pink
+        ]
+        background_color = random.choice(colors)
+    
+    # Parse form data
     try:
         form = await request.form()
     except Exception as e:
@@ -877,62 +1098,26 @@ async def crop_and_zoom_video(
                 "content_type_received": content_type,
                 "expected": "multipart/form-data",
                 "parsing_error": str(e),
-                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File', 4) Select your video file, 5) Make sure no Content-Type header is manually set"
+                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File' OR add video_url parameter"
             }
         )
-    
-    # Find the first file in the form data
-    video_file = None
-    field_name = None
-    available_fields = []
-    field_types = {}
-    
-    for key, value in form.items():
-        available_fields.append(key)
-        field_types[key] = type(value).__name__
-        
-        is_upload_file = (
-            isinstance(value, UploadFile) or 
-            type(value).__name__ == "UploadFile" or
-            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
-        )
-        
-        if is_upload_file:
-            video_file = value
-            field_name = key
-            break
-    
-    if not video_file:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "No file uploaded",
-                "found_fields": available_fields,
-                "field_types": field_types,
-                "help": "Make sure you're sending a file, not just text. In Postman, set the key type to 'File' (not 'Text'), then select your video file."
-            }
-        )
-    
-    # Save uploaded file
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    input_filename = video_file.filename or "video"
-    input_path = upload_dir / f"crop_zoom_{timestamp}_{input_filename}"
     
     try:
-        # Save uploaded video
-        with open(input_path, "wb") as f:
-            content = await video_file.read()
-            f.write(content)
+        # Get video input (from URL or file upload)
+        input_path, input_filename = await get_video_input(
+            form=form,
+            video_url=video_url,
+            prefix="crop_zoom"
+        )
         
         # Create output path
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         output_dir = project_root / "temp_videos" / "output" / "crop_zoom"
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        size_suffix = f"{output_size}x{output_size}" if output_size else "original"
-        output_filename = f"square_{size_suffix}_{timestamp}_{Path(input_filename).stem}.mp4"
+        # Sanitize aspect_ratio for filename
+        aspect_safe = aspect_ratio.replace(":", "_")
+        output_filename = f"crop_{aspect_safe}_9x16_{timestamp}_{Path(input_filename).stem}.mp4"
         output_path = output_dir / output_filename
         
         # Create job
@@ -942,7 +1127,9 @@ async def crop_and_zoom_video(
                 "input_path": str(input_path),
                 "output_path": str(output_path),
                 "original_filename": input_filename,
-                "output_size": output_size,
+                "aspect_ratio": aspect_ratio,
+                "background_color": background_color,
+                "video_url": video_url if video_url else None,
             },
             output_path=output_path,
         )
@@ -953,7 +1140,8 @@ async def crop_and_zoom_video(
             job_id=job_id,
             input_path=str(input_path),
             output_path=str(output_path),
-            output_size=output_size,
+            aspect_ratio=aspect_ratio,
+            background_color=background_color,
             job_manager=job_manager,
         )
         
@@ -964,7 +1152,9 @@ async def crop_and_zoom_video(
             "message": "Video upload successful. Crop and zoom started.",
             "status_url": f"/api/v1/jobs/{job_id}",
             "download_url": f"/api/v1/videos/{job_id}/download",
-            "output_size": output_size,
+            "aspect_ratio": aspect_ratio,
+            "background_color": background_color,
+            "output_format": "9:16 (1080x1920)",
         }
     
     except Exception as e:
@@ -978,10 +1168,11 @@ async def process_crop_and_zoom(
     job_id: str,
     input_path: str,
     output_path: str,
-    output_size: int,
+    aspect_ratio: str,
+    background_color: str,
     job_manager: JobManager,
 ):
-    """Background task to crop and zoom video to square."""
+    """Background task to crop video to aspect ratio and output as 9:16."""
     try:
         job_manager.update_job(
             job_id,
@@ -997,16 +1188,19 @@ async def process_crop_and_zoom(
         job_manager.update_job(
             job_id,
             progress=30,
-            message="Cropping to center square...",
+            message=f"Processing video: cropping to {aspect_ratio}, scaling, and encoding to 9:16 (this may take several minutes)...",
         )
         
         # Process video (runs in thread pool)
+        # Note: This is a long-running operation that can take several minutes
+        # The write_videofile call is CPU-intensive and does not provide progress updates
         await loop.run_in_executor(
             None,
-            processor.crop_and_zoom_to_square,
+            processor.crop_to_aspect_ratio_and_pad_to_9_16,
             input_path,
             output_path,
-            output_size,
+            aspect_ratio,
+            background_color,
         )
         
         job_manager.update_job(
@@ -1020,12 +1214,11 @@ async def process_crop_and_zoom(
             raise Exception("Output file was not created")
         
         # Update job to completed
-        size_info = f"{output_size}x{output_size}" if output_size else "original size"
         job_manager.update_job(
             job_id,
             status=JobStatus.COMPLETED,
             progress=100,
-            message=f"Crop and zoom completed ({size_info})",
+            message=f"Crop completed (cropped to {aspect_ratio}, output as 9:16)",
             output_path=Path(output_path),
         )
     
@@ -1055,12 +1248,16 @@ async def reencode_video(
     codec: Optional[str] = Form("libx264"),
     bitrate: Optional[str] = Form(None),
     fps: Optional[float] = Form(None),
+    video_url: Optional[str] = Form(None),
 ):
     """
-    Upload a video and re-encode it with specified settings.
+    Upload a video (or provide URL) and re-encode it with specified settings.
     
-    Accepts a file upload with any field name (e.g., 'video', 'file', 'upload', etc.).
-    The file must be sent as multipart/form-data.
+    Either:
+    - Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
+    - OR provide a video_url parameter with a URL to download from (YouTube, Instagram, etc.)
+    
+    The file/request must be sent as multipart/form-data.
     
     Parameters:
     - codec: Video codec to use (default: "libx264")
@@ -1151,6 +1348,7 @@ async def reencode_video(
                 "codec": codec,
                 "bitrate": bitrate,
                 "fps": fps,
+                "video_url": video_url if video_url else None,
             },
             output_path=output_path,
         )
@@ -1266,14 +1464,18 @@ async def process_reencode(
 async def merge_audio_and_video(
     background_tasks: BackgroundTasks,
     request: Request,
+    video_url: Optional[str] = Form(None),
 ):
     """
-    Upload a video file and an audio file, merge them together.
+    Upload a video file (or provide URL) and an audio file, merge them together.
     
     The longer of the two will be clipped to match the shorter duration.
     
-    Accepts two file uploads with any field names (e.g., 'video', 'audio', 'file1', 'file2', etc.).
-    The files must be sent as multipart/form-data.
+    Either:
+    - Upload a video file and an audio file with any field names (e.g., 'video', 'audio', 'file1', 'file2', etc.)
+    - OR provide a video_url parameter for the video and upload an audio file
+    
+    The files/request must be sent as multipart/form-data.
     
     Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
     When completed, download the video via GET /api/v1/videos/{job_id}/download
@@ -1296,91 +1498,123 @@ async def merge_audio_and_video(
             }
         )
     
-    # Find video and audio files in the form data
-    video_file = None
-    audio_file = None
-    available_fields = []
-    field_types = {}
+    # Handle video input (from URL or file upload)
+    video_path = None
+    video_filename = None
+    uploaded_video_file = None  # Track if we got video from file upload
     
-    video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
-    audio_extensions = {'.mp3', '.wav', '.aac', '.m4a', '.ogg', '.flac', '.wma'}
-    
-    for key, value in form.items():
-        available_fields.append(key)
-        field_types[key] = type(value).__name__
+    if video_url:
+        # Download video from URL
+        try:
+            video_path, video_filename = await get_video_input(
+                form={},  # Empty form since we're using URL
+                video_url=video_url,
+                prefix="merge_video"
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Failed to download video from URL: {str(e)}",
+                    "url": video_url,
+                }
+            )
+    else:
+        # Find video file in form data
+        video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
         
-        is_upload_file = (
-            isinstance(value, UploadFile) or 
-            type(value).__name__ == "UploadFile" or
-            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
-        )
-        
-        if is_upload_file:
-            filename = getattr(value, 'filename', '')
-            ext = Path(filename).suffix.lower()
-            
-            # Classify as video or audio based on extension
-            if ext in video_extensions and not video_file:
-                video_file = value
-            elif ext in audio_extensions and not audio_file:
-                audio_file = value
-    
-    # If we couldn't determine by extension, use first two files
-    if not video_file or not audio_file:
-        files = []
         for key, value in form.items():
             is_upload_file = (
                 isinstance(value, UploadFile) or 
                 type(value).__name__ == "UploadFile" or
                 (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
             )
+            
             if is_upload_file:
-                files.append(value)
+                filename = getattr(value, 'filename', '')
+                ext = Path(filename).suffix.lower()
+                if ext in video_extensions:
+                    uploaded_video_file = value
+                    break
         
-        if len(files) < 2:
+        if not uploaded_video_file:
+            # Try first file as video if no extension match
+            for key, value in form.items():
+                is_upload_file = (
+                    isinstance(value, UploadFile) or 
+                    type(value).__name__ == "UploadFile" or
+                    (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
+                )
+                if is_upload_file:
+                    uploaded_video_file = value
+                    break
+        
+        if uploaded_video_file:
+            video_path, video_filename = await get_video_input(
+                form={key: uploaded_video_file for key, value in form.items() if value == uploaded_video_file},
+                video_url=None,
+                prefix="merge_video"
+            )
+        
+        if not video_path:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": "Need both video and audio files",
-                    "found_fields": available_fields,
-                    "field_types": field_types,
-                    "help": "Upload two files: one video file (mp4, avi, mov, etc.) and one audio file (mp3, wav, aac, etc.)"
+                    "error": "Video input is required",
+                    "help": "Either provide a video_url parameter OR upload a video file"
                 }
             )
-        
-        # First file as video, second as audio (or vice versa)
-        if not video_file:
-            video_file = files[0]
-        if not audio_file:
-            audio_file = files[1] if len(files) > 1 else None
     
-    if not video_file or not audio_file:
+    # Find audio file in form data (audio must always be uploaded)
+    audio_file = None
+    audio_extensions = {'.mp3', '.wav', '.aac', '.m4a', '.ogg', '.flac', '.wma'}
+    
+    for key, value in form.items():
+        is_upload_file = (
+            isinstance(value, UploadFile) or 
+            type(value).__name__ == "UploadFile" or
+            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
+        )
+        
+        if is_upload_file and value != uploaded_video_file:  # Don't use same file as video
+            filename = getattr(value, 'filename', '')
+            ext = Path(filename).suffix.lower()
+            if ext in audio_extensions:
+                audio_file = value
+                break
+    
+    if not audio_file:
+        # Try to find any file as audio (skip the uploaded video file if it exists)
+        for key, value in form.items():
+            is_upload_file = (
+                isinstance(value, UploadFile) or 
+                type(value).__name__ == "UploadFile" or
+                (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
+            )
+            if is_upload_file and value != uploaded_video_file:
+                audio_file = value
+                break
+    
+    if not audio_file:
         raise HTTPException(
             status_code=400,
             detail={
-                "error": "Both video and audio files are required",
-                "found_fields": available_fields,
-                "field_types": field_types,
-                "help": "Upload two files: one video file and one audio file"
+                "error": "Audio file is required",
+                "help": "Upload an audio file (mp3, wav, aac, etc.) - video can come from video_url parameter or file upload"
             }
         )
     
-    # Save uploaded files
+    # Save uploaded audio file
     upload_dir = project_root / "temp_videos" / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    video_filename = video_file.filename or "video"
     audio_filename = audio_file.filename or "audio"
-    
-    video_path = upload_dir / f"merge_video_{timestamp}_{video_filename}"
     audio_path = upload_dir / f"merge_audio_{timestamp}_{audio_filename}"
     
     try:
-        # Save uploaded video
-        with open(video_path, "wb") as f:
-            content = await video_file.read()
-            f.write(content)
+        if not video_path:
+            raise HTTPException(status_code=400, detail="Video input is required (either video_url or video file upload)")
         
         # Save uploaded audio
         with open(audio_path, "wb") as f:
@@ -1403,6 +1637,7 @@ async def merge_audio_and_video(
                 "output_path": str(output_path),
                 "video_filename": video_filename,
                 "audio_filename": audio_filename,
+                "video_url": video_url if video_url else None,
             },
             output_path=output_path,
         )
@@ -1527,11 +1762,12 @@ async def process_video_comprehensive(
     codec: Optional[str] = Form("libx264"),
     bitrate: Optional[str] = Form(None),
     fps: Optional[float] = Form(None),
+    video_url: Optional[str] = Form(None),
 ):
     """
     Comprehensive video processing endpoint - apply multiple transformations in one request.
     
-    Upload a video file (and optionally an audio file) and apply multiple processing operations
+    Upload a video file (or provide URL) and optionally an audio file, then apply multiple processing operations
     based on boolean flags. All operations are applied in sequence:
     1. Merge audio (if merge_audio=True and audio file provided)
     2. Remove audio (if remove_audio=True, overrides merge_audio)
@@ -1539,7 +1775,11 @@ async def process_video_comprehensive(
     4. Crop and zoom to square (if crop_zoom=True)
     5. Re-encode (if reencode=True)
     
-    Accepts file uploads with any field names. The files must be sent as multipart/form-data.
+    Either:
+    - Upload a video file with any field name (and optionally an audio file)
+    - OR provide a video_url parameter with a URL to download from (YouTube, Instagram, etc.)
+    
+    The files/request must be sent as multipart/form-data.
     
     Boolean Parameters (all default to False):
     - remove_audio: Remove audio track from video
@@ -1583,93 +1823,53 @@ async def process_video_comprehensive(
             }
         )
     
-    # Find video and audio files
-    video_file = None
-    audio_file = None
-    video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
-    audio_extensions = {'.mp3', '.wav', '.aac', '.m4a', '.ogg', '.flac', '.wma'}
-    
-    available_fields = []
-    field_types = {}
-    
-    for key, value in form.items():
-        available_fields.append(key)
-        field_types[key] = type(value).__name__
-        
-        is_upload_file = (
-            isinstance(value, UploadFile) or 
-            type(value).__name__ == "UploadFile" or
-            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
-        )
-        
-        if is_upload_file:
-            filename = getattr(value, 'filename', '')
-            ext = Path(filename).suffix.lower()
-            
-            if ext in video_extensions and not video_file:
-                video_file = value
-            elif ext in audio_extensions and not audio_file:
-                audio_file = value
-    
-    # If we couldn't determine by extension, use first file as video, second as audio
-    if not video_file:
-        files = []
-        for key, value in form.items():
-            is_upload_file = (
-                isinstance(value, UploadFile) or 
-                type(value).__name__ == "UploadFile" or
-                (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
-            )
-            if is_upload_file:
-                files.append(value)
-        
-        if len(files) > 0:
-            video_file = files[0]
-        if len(files) > 1:
-            audio_file = files[1]
-    
-    if not video_file:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "No video file uploaded",
-                "found_fields": available_fields,
-                "field_types": field_types,
-                "help": "Upload at least one video file"
-            }
-        )
-    
-    # Validate merge_audio requires audio file
-    if merge_audio and not audio_file:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "merge_audio=True requires an audio file to be uploaded",
-                "help": "Upload both a video file and an audio file when merge_audio=True"
-            }
-        )
-    
-    # Save uploaded files
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    video_filename = video_file.filename or "video"
-    input_video_path = upload_dir / f"process_{timestamp}_{video_filename}"
-    
-    input_audio_path = None
-    if audio_file:
-        audio_filename = audio_file.filename or "audio"
-        input_audio_path = upload_dir / f"process_audio_{timestamp}_{audio_filename}"
-    
     try:
-        # Save uploaded video
-        with open(input_video_path, "wb") as f:
-            content = await video_file.read()
-            f.write(content)
+        # Get video input (from URL or file upload)
+        input_video_path, video_filename = await get_video_input(
+            form=form,
+            video_url=video_url,
+            prefix="process"
+        )
         
-        # Save uploaded audio if provided
-        if audio_file and input_audio_path:
+        # Find audio file if merge_audio is requested
+        audio_file = None
+        input_audio_path = None
+        audio_filename = None
+        
+        if merge_audio:
+            audio_extensions = {'.mp3', '.wav', '.aac', '.m4a', '.ogg', '.flac', '.wma'}
+            
+            # Find audio file in form data
+            for key, value in form.items():
+                is_upload_file = (
+                    isinstance(value, UploadFile) or 
+                    type(value).__name__ == "UploadFile" or
+                    (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
+                )
+                
+                if is_upload_file:
+                    filename = getattr(value, 'filename', '')
+                    ext = Path(filename).suffix.lower()
+                    if ext in audio_extensions:
+                        audio_file = value
+                        break
+            
+            if not audio_file:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "merge_audio=True requires an audio file to be uploaded",
+                        "help": "Upload an audio file (mp3, wav, aac, etc.) when merge_audio=True"
+                    }
+                )
+            
+            # Save audio file
+            upload_dir = project_root / "temp_videos" / "uploads"
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            audio_filename = audio_file.filename or "audio"
+            input_audio_path = upload_dir / f"process_audio_{timestamp}_{audio_filename}"
+            
             with open(input_audio_path, "wb") as f:
                 content = await audio_file.read()
                 f.write(content)
@@ -1704,6 +1904,7 @@ async def process_video_comprehensive(
                 "output_path": str(output_path),
                 "video_filename": video_filename,
                 "audio_filename": audio_file.filename if audio_file else None,
+                "video_url": video_url if video_url else None,
                 "remove_audio": remove_audio,
                 "merge_audio": merge_audio,
                 "color_grading": color_grading,

@@ -65,6 +65,9 @@ async def lifespan(app: FastAPI):
     comprehensive_dir = temp_dir / "output" / "comprehensive"
     comprehensive_dir.mkdir(parents=True, exist_ok=True)
     
+    ytdlp_dir = temp_dir / "output" / "ytdlp_downloads"
+    ytdlp_dir.mkdir(parents=True, exist_ok=True)
+    
     yield
     
     # Shutdown
