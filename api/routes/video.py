@@ -18,6 +18,7 @@ sys.path.insert(0, str(project_root))
 
 from api.core.job_manager import JobManager, JobStatus
 from api.services.video_processor import VideoProcessor
+from api.services.ytdlp_service import YTDLPService
 
 router = APIRouter()
 
@@ -438,7 +439,7 @@ async def download_video(job_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Job not found")
     
     # Allow download for video output jobs
-    if job["type"] not in ["remove_audio", "color_grading", "crop_zoom", "reencode", "merge_audio_video", "comprehensive"]:
+    if job["type"] not in ["remove_audio", "color_grading", "crop_zoom", "reencode", "merge_audio_video", "comprehensive", "ytdlp_download"]:
         raise HTTPException(
             status_code=400,
             detail=f"This endpoint is for video downloads only. Job type: {job['type']}",
@@ -560,6 +561,165 @@ async def download_scene_data(job_id: str, request: Request):
         media_type="application/json",
         filename=output_filename,
     )
+
+
+@router.post("/videos/download-from-url")
+async def download_video_from_url(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    url: str = Form(...),
+    quality: Optional[str] = Form("best"),
+    format_type: Optional[str] = Form("mp4"),
+    audio_only: Optional[bool] = Form(False),
+    output_filename: Optional[str] = Form(None),
+):
+    """
+    Download a video from a URL using yt-dlp (subprocess-based implementation).
+    
+    Supports YouTube, Vimeo, and other platforms supported by yt-dlp.
+    
+    Parameters (form-data):
+    - url: URL of the video to download (required)
+    - quality: Video quality ('best', 'worst', '720p', '1080p', etc.) - default: 'best'
+    - format_type: Output format ('mp4', 'webm', etc.) - default: 'mp4'
+    - audio_only: If True, download audio only (as mp3) - default: False
+    - output_filename: Optional custom filename (without extension)
+    
+    Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
+    When completed, download the video via GET /api/v1/videos/{job_id}/download
+    """
+    job_manager: JobManager = get_job_manager(request)
+    
+    # Validate URL
+    if not url or not url.strip():
+        raise HTTPException(status_code=400, detail="URL parameter is required")
+    
+    # Create job
+    job_id = job_manager.create_job(
+        job_type="ytdlp_download",
+        parameters={
+            "url": url,
+            "quality": quality,
+            "format_type": format_type,
+            "audio_only": audio_only,
+            "output_filename": output_filename,
+        },
+    )
+    
+    # Prepare output directory
+    output_dir = project_root / "temp_videos" / "output" / "ytdlp_downloads"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate output filename
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if output_filename:
+        safe_filename = "".join(c for c in output_filename if c.isalnum() or c in (' ', '-', '_')).strip()
+        output_path = output_dir / f"{safe_filename}.{format_type if not audio_only else 'mp3'}"
+    else:
+        output_path = output_dir / f"download_{timestamp}.{format_type if not audio_only else 'mp3'}"
+    
+    # Start background processing
+    background_tasks.add_task(
+        process_ytdlp_download,
+        job_id=job_id,
+        url=url,
+        output_path=str(output_path),
+        quality=quality,
+        format_type=format_type,
+        audio_only=audio_only,
+        output_filename=output_filename,
+        job_manager=job_manager,
+    )
+    
+    # Return job_id immediately
+    return {
+        "job_id": job_id,
+        "status": "pending",
+        "message": "Download started",
+        "status_url": f"/api/v1/jobs/{job_id}",
+        "download_url": f"/api/v1/videos/{job_id}/download",
+    }
+
+
+async def process_ytdlp_download(
+    job_id: str,
+    url: str,
+    output_path: str,
+    quality: str,
+    format_type: str,
+    audio_only: bool,
+    output_filename: Optional[str],
+    job_manager: JobManager,
+):
+    """
+    Background task to download video using yt-dlp.
+    """
+    try:
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.PROCESSING,
+            progress=10,
+            message="Initializing download...",
+        )
+        
+        # Initialize yt-dlp service
+        output_dir = Path(output_path).parent
+        ytdlp_service = YTDLPService(output_dir=output_dir)
+        
+        job_manager.update_job(
+            job_id,
+            progress=20,
+            message="Connecting to video source...",
+        )
+        
+        # Run download in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        
+        job_manager.update_job(
+            job_id,
+            progress=30,
+            message="Downloading video...",
+        )
+        
+        # Download video (runs in thread pool)
+        result = await loop.run_in_executor(
+            None,
+            ytdlp_service.download_video,
+            url,
+            output_filename,
+            quality,
+            format_type,
+            audio_only,
+        )
+        
+        job_manager.update_job(
+            job_id,
+            progress=90,
+            message="Download completed, finalizing...",
+        )
+        
+        # Verify output file exists
+        actual_output_path = Path(result["output_path"])
+        if not actual_output_path.exists():
+            raise Exception("Downloaded file was not found")
+        
+        # Update job to completed
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.COMPLETED,
+            progress=100,
+            message="Download completed successfully",
+            output_path=actual_output_path,
+        )
+    
+    except Exception as e:
+        error_msg = str(e)
+        job_manager.update_job(
+            job_id,
+            status=JobStatus.FAILED,
+            error=error_msg,
+            message=f"Download failed: {error_msg}",
+        )
 
 
 @router.post("/videos/color-grade")
