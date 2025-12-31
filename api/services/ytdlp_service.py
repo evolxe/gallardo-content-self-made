@@ -427,12 +427,18 @@ class YTDLPService:
             
             info = json.loads(result.stdout)
             
+            description = info.get('description')
+            if description:
+                description = description[:500]  # First 500 chars
+            else:
+                description = ''
+            
             return {
                 "title": info.get('title', 'Unknown'),
                 "duration": info.get('duration', 0),
                 "uploader": info.get('uploader', 'Unknown'),
                 "view_count": info.get('view_count', 0),
-                "description": info.get('description', '')[:500],  # First 500 chars
+                "description": description,
                 "thumbnail": info.get('thumbnail', ''),
                 "formats": len(info.get('formats', [])),
                 "url": url,

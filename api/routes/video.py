@@ -167,6 +167,7 @@ async def remove_audio_from_video(
     Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
     """
     job_manager: JobManager = get_job_manager(request)
+    input_path = None  # Initialize to avoid UnboundLocalError
     
     # Parse form data
     try:
@@ -229,9 +230,12 @@ async def remove_audio_from_video(
             "download_url": f"/api/v1/videos/{job_id}/download",
         }
     
+    except HTTPException:
+        # Re-raise HTTPExceptions (they're already properly formatted)
+        raise
     except Exception as e:
         # Clean up on error
-        if input_path.exists():
+        if input_path is not None and input_path.exists():
             input_path.unlink()
         raise HTTPException(status_code=500, detail=f"Error processing video: {str(e)}")
 
@@ -325,6 +329,7 @@ async def detect_scenes_in_video(
     When completed, the job result will contain scene information.
     """
     job_manager: JobManager = get_job_manager(request)
+    input_path = None  # Initialize to avoid UnboundLocalError
     
     # Parse form data
     try:
@@ -386,9 +391,12 @@ async def detect_scenes_in_video(
             "status_url": f"/api/v1/jobs/{job_id}",
         }
     
+    except HTTPException:
+        # Re-raise HTTPExceptions (they're already properly formatted)
+        raise
     except Exception as e:
         # Clean up on error
-        if input_path.exists():
+        if input_path is not None and input_path.exists():
             input_path.unlink()
         raise HTTPException(status_code=500, detail=f"Error processing video: {str(e)}")
 
@@ -804,6 +812,7 @@ async def color_grade_video(
     When completed, download the video via GET /api/v1/videos/{job_id}/download
     """
     job_manager: JobManager = get_job_manager(request)
+    input_path = None  # Initialize to avoid UnboundLocalError
     
     valid_presets = ["cinematic", "warm", "cool", "vintage", "vivid", "bw", "natural", "random"]
     
@@ -932,9 +941,12 @@ async def color_grade_video(
         
         return response
     
+    except HTTPException:
+        # Re-raise HTTPExceptions (they're already properly formatted)
+        raise
     except Exception as e:
         # Clean up on error
-        if input_path.exists():
+        if input_path is not None and input_path.exists():
             input_path.unlink()
         raise HTTPException(status_code=500, detail=f"Error processing video: {str(e)}")
 
@@ -1049,6 +1061,7 @@ async def crop_and_zoom_video(
     When completed, download the video via GET /api/v1/videos/{job_id}/download
     """
     job_manager: JobManager = get_job_manager(request)
+    input_path = None  # Initialize to avoid UnboundLocalError
     
     # Default aspect_ratio to 1:1 if not provided
     if not aspect_ratio:
@@ -1157,9 +1170,12 @@ async def crop_and_zoom_video(
             "output_format": "9:16 (1080x1920)",
         }
     
+    except HTTPException:
+        # Re-raise HTTPExceptions (they're already properly formatted)
+        raise
     except Exception as e:
         # Clean up on error
-        if input_path.exists():
+        if input_path is not None and input_path.exists():
             input_path.unlink()
         raise HTTPException(status_code=500, detail=f"Error processing video: {str(e)}")
 
