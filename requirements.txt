@@ -12,3 +12,4 @@ python-multipart
 pydantic
 scenedetect
 opencv-python
+yt-dlp

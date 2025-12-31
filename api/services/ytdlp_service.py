@@ -190,6 +190,82 @@ class YTDLPService:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
     
+    @staticmethod
+    def _find_ytdlp_binary() -> str:
+        """
+        Find yt-dlp binary in multiple locations.
+        
+        Checks in order:
+        1. System PATH (for Docker/system-wide installations)
+        2. Virtual environment (venv/bin or venv/Scripts)
+        3. Python site-packages bin directory (for pip installs)
+        4. User local bin directory (~/.local/bin)
+        
+        Returns:
+            Path to yt-dlp binary
+            
+        Raises:
+            Exception: If yt-dlp binary is not found in any location
+        """
+        # Check system PATH first (works for Docker and system-wide installs)
+        ytdlp_binary = shutil.which("yt-dlp")
+        if ytdlp_binary:
+            return ytdlp_binary
+        
+        # Try alternative name
+        ytdlp_binary = shutil.which("ytdlp")
+        if ytdlp_binary:
+            return ytdlp_binary
+        
+        # Check virtual environment (common for local development)
+        venv_scripts = project_root / "venv" / ("Scripts" if os.name == "nt" else "bin")
+        venv_ytdlp = venv_scripts / ("yt-dlp.exe" if os.name == "nt" else "yt-dlp")
+        if venv_ytdlp.exists():
+            return str(venv_ytdlp)
+        
+        # Check Python site-packages bin directory (for pip installs in Python environment)
+        # This is where Render.com and other cloud platforms install pip packages
+        try:
+            import site
+            for site_packages in site.getsitepackages():
+                # site-packages is typically in .../lib/pythonX.X/site-packages
+                # bin directory is typically in .../bin (parent of lib)
+                bin_dir = Path(site_packages).parent.parent / ("Scripts" if os.name == "nt" else "bin")
+                ytdlp_path = bin_dir / ("yt-dlp.exe" if os.name == "nt" else "yt-dlp")
+                if ytdlp_path.exists():
+                    return str(ytdlp_path)
+        except (AttributeError, ImportError):
+            pass
+        
+        # Check user local bin directory (~/.local/bin on Linux/Mac, %USERPROFILE%\.local\bin on Windows)
+        # This is where pip installs user packages
+        if os.name == "nt":
+            user_local_bin = Path.home() / ".local" / "bin"
+        else:
+            user_local_bin = Path.home() / ".local" / "bin"
+        
+        user_ytdlp = user_local_bin / ("yt-dlp.exe" if os.name == "nt" else "yt-dlp")
+        if user_ytdlp.exists():
+            return str(user_ytdlp)
+        
+        # Also check if we can find it via sys.executable's directory
+        # This handles cases where Python is in a virtual environment
+        python_dir = Path(sys.executable).parent
+        python_bin_ytdlp = python_dir / ("yt-dlp.exe" if os.name == "nt" else "yt-dlp")
+        if python_bin_ytdlp.exists():
+            return str(python_bin_ytdlp)
+        
+        # If still not found, raise exception
+        raise Exception(
+            "yt-dlp binary not found. Please install yt-dlp: pip install yt-dlp\n"
+            "The binary was checked in:\n"
+            "- System PATH\n"
+            "- Virtual environment (venv/bin or venv/Scripts)\n"
+            "- Python site-packages bin directory\n"
+            "- User local bin directory (~/.local/bin)\n"
+            "- Python executable directory"
+        )
+    
     def _get_env_with_ffmpeg(self):
         """
         Get environment variables with ffmpeg in PATH.
@@ -280,16 +356,8 @@ class YTDLPService:
         # We'll let yt-dlp handle FFmpeg detection and provide better error messages
         # if it's not found, rather than pre-checking here
         
-        # Check if yt-dlp binary is available
-        ytdlp_binary = shutil.which("yt-dlp")
-        if not ytdlp_binary:
-            # Try alternative names
-            ytdlp_binary = shutil.which("ytdlp")
-            if not ytdlp_binary:
-                raise Exception(
-                    "yt-dlp binary not found. Please install yt-dlp system-wide. "
-                    "See: https://github.com/yt-dlp/yt-dlp#installation"
-                )
+        # Find yt-dlp binary (checks multiple locations for compatibility)
+        ytdlp_binary = self._find_ytdlp_binary()
         
         # Build yt-dlp command using subprocess (following Python backend pattern)
         cmd = [ytdlp_binary]
@@ -400,15 +468,8 @@ class YTDLPService:
         Raises:
             Exception: If info extraction fails
         """
-        # Check if yt-dlp binary is available
-        ytdlp_binary = shutil.which("yt-dlp")
-        if not ytdlp_binary:
-            ytdlp_binary = shutil.which("ytdlp")
-            if not ytdlp_binary:
-                raise Exception(
-                    "yt-dlp binary not found. Please install yt-dlp system-wide. "
-                    "See: https://github.com/yt-dlp/yt-dlp#installation"
-                )
+        # Find yt-dlp binary (checks multiple locations for compatibility)
+        ytdlp_binary = self._find_ytdlp_binary()
         
         # Use subprocess to get video info (following Python backend pattern)
         cmd = [ytdlp_binary, '--dump-json', '--no-download', url]
