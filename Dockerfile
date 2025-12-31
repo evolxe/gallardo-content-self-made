@@ -14,7 +14,14 @@ RUN apt-get update && apt-get install -y \
     libxrender-dev \
     libgomp1 \
     curl \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install deno (JavaScript runtime) for yt-dlp YouTube extraction
+# YouTube now requires a JS runtime for proper extraction
+RUN curl -fsSL https://deno.land/install.sh | sh \
+    && mv /root/.deno/bin/deno /usr/local/bin/deno \
+    && chmod +x /usr/local/bin/deno
 
 # Install yt-dlp as a system binary (following Python backend pattern - subprocess calls)
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \

@@ -362,6 +362,12 @@ class YTDLPService:
         # Build yt-dlp command using subprocess (following Python backend pattern)
         cmd = [ytdlp_binary]
         
+        # Add JavaScript runtime for YouTube extraction (required for YouTube)
+        # Check if deno is available
+        deno_binary = shutil.which("deno")
+        if deno_binary:
+            cmd.extend(['--js-runtimes', 'deno'])
+        
         # Set output template
         if output_filename:
             outtmpl = str(self.output_dir / f'{output_filename}.%(ext)s')
@@ -394,17 +400,36 @@ class YTDLPService:
             
             # Get video info first (for metadata)
             info_cmd = [ytdlp_binary, '--dump-json', '--no-download', url]
-            info_result = subprocess.run(
-                info_cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                env=env
-            )
-            info = json.loads(info_result.stdout)
+            # Add JavaScript runtime if available (required for YouTube)
+            if deno_binary:
+                info_cmd.insert(1, '--js-runtimes')
+                info_cmd.insert(2, 'deno')
+            
+            try:
+                info_result = subprocess.run(
+                    info_cmd,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    env=env
+                )
+                info = json.loads(info_result.stdout)
+            except subprocess.CalledProcessError as e:
+                # Get error from stderr or stdout
+                error_output = e.stderr if e.stderr else (e.stdout if e.stdout else str(e))
+                error_msg = f"Failed to get video info: {error_output}"
+                
+                # Check for common issues
+                error_lower = error_msg.lower()
+                if "sign in to confirm" in error_lower or "not a bot" in error_lower:
+                    error_msg += "\n\nThis video requires authentication (YouTube bot detection). Some videos may not be accessible without cookies."
+                elif "javascript runtime" in error_lower or "js-runtimes" in error_lower:
+                    error_msg += "\n\nJavaScript runtime (deno) should be installed. If this error persists, the video may require additional authentication."
+                
+                raise Exception(error_msg)
             
             # Download the video using subprocess (following Python backend pattern)
-            subprocess.run(cmd, check=True, env=env)
+            download_result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=env)
             
             # Find the newly created file
             files_after = set(self.output_dir.glob("*"))
@@ -442,12 +467,19 @@ class YTDLPService:
             error_output = e.stderr if hasattr(e, 'stderr') and e.stderr else (e.stdout if hasattr(e, 'stdout') and e.stdout else str(e))
             error_msg = f"Download failed: {error_output}"
             
-            # Check if it's an FFmpeg-related error and provide helpful message
-            if "ffmpeg" in error_msg.lower() or "ffprobe" in error_msg.lower():
+            # Check for common YouTube issues
+            error_lower = error_msg.lower()
+            if "sign in to confirm" in error_lower or "not a bot" in error_lower or "cookies" in error_lower:
+                error_msg += "\n\nThis video requires authentication (YouTube bot detection). "
+                error_msg += "Some videos may not be accessible without cookies. "
+                error_msg += "Try a different video or use cookies if available."
+            elif "ffmpeg" in error_lower or "ffprobe" in error_lower:
                 error_msg += "\n\nFFmpeg is required for audio extraction. Please install FFmpeg system-wide:\n"
                 error_msg += "- Windows: Download from https://ffmpeg.org/download.html and add to PATH\n"
                 error_msg += "- Linux: sudo apt-get install ffmpeg\n"
                 error_msg += "- macOS: brew install ffmpeg"
+            elif "javascript runtime" in error_lower or "js-runtimes" in error_lower:
+                error_msg += "\n\nJavaScript runtime (deno) should be installed. If this error persists, the video may require additional authentication."
             
             raise Exception(error_msg)
         except json.JSONDecodeError as e:
@@ -471,8 +503,15 @@ class YTDLPService:
         # Find yt-dlp binary (checks multiple locations for compatibility)
         ytdlp_binary = self._find_ytdlp_binary()
         
+        # Check if deno (JavaScript runtime) is available for YouTube extraction
+        deno_binary = shutil.which("deno")
+        
         # Use subprocess to get video info (following Python backend pattern)
         cmd = [ytdlp_binary, '--dump-json', '--no-download', url]
+        # Add JavaScript runtime if available (required for YouTube)
+        if deno_binary:
+            cmd.insert(1, '--js-runtimes')
+            cmd.insert(2, 'deno')
         
         try:
             # Get environment with ffmpeg in PATH
