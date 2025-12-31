@@ -1591,12 +1591,32 @@ async def merge_audio_and_video(
             }
         )
     
+    # Extract URLs from form - ALWAYS check form dict first, then use parameter if form doesn't have it
+    # This ensures we get the values even if Form() parameter extraction fails
+    form_video_url = form.get("video_url")
+    form_audio_url = form.get("audio_url")
+    
+    # Prioritize form dict values, fallback to parameter
+    if form_video_url:
+        video_url = str(form_video_url).strip() if str(form_video_url).strip() else None
+    elif video_url and isinstance(video_url, str):
+        video_url = video_url.strip() or None
+    else:
+        video_url = None
+    
+    if form_audio_url:
+        audio_url = str(form_audio_url).strip() if str(form_audio_url).strip() else None
+    elif audio_url and isinstance(audio_url, str):
+        audio_url = audio_url.strip() or None
+    else:
+        audio_url = None
+    
     # Handle video input (from URL or file upload)
     video_path = None
     video_filename = None
     uploaded_video_file = None  # Track if we got video from file upload
     
-    if video_url:
+    if video_url and video_url.strip():
         # Download video from URL
         try:
             video_path, video_filename = await get_video_input(
@@ -1663,7 +1683,20 @@ async def merge_audio_and_video(
     audio_filename = None
     uploaded_audio_file = None
     
-    if audio_url:
+    # Final check: If audio_url is still None, search all form keys (case-insensitive)
+    # This handles cases where the form key might be different
+    if not audio_url:
+        for key in form.keys():
+            key_lower = key.lower().replace('-', '_').replace(' ', '_')
+            if key_lower in ['audio_url', 'audiourl', 'audio', 'audiofileurl']:
+                value = form.get(key)
+                if value and not isinstance(value, UploadFile):
+                    audio_url = str(value).strip() if str(value).strip() else None
+                    if audio_url:
+                        break
+    
+    # Now check if we have audio_url - if yes, download it; if no, look for file upload
+    if audio_url and audio_url.strip():
         # Download audio from URL using yt-dlp with audio_only=True
         try:
             # Prepare output directory for audio download
