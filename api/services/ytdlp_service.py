@@ -362,6 +362,11 @@ class YTDLPService:
         # Build yt-dlp command using subprocess (following Python backend pattern)
         cmd = [ytdlp_binary]
         
+        # Enable EJS challenge solver scripts from GitHub (required for YouTube)
+        # This allows yt-dlp to download EJS scripts automatically
+        # Must be specified before other options
+        cmd.extend(['--remote-components', 'ejs:github'])
+        
         # Add JavaScript runtime for YouTube extraction (required for YouTube)
         # Check if deno is available
         deno_binary = shutil.which("deno")
@@ -399,11 +404,14 @@ class YTDLPService:
             files_before = set(self.output_dir.glob("*"))
             
             # Get video info first (for metadata)
-            info_cmd = [ytdlp_binary, '--dump-json', '--no-download', url]
+            info_cmd = [ytdlp_binary]
+            # Enable EJS challenge solver scripts from GitHub (must come before other options)
+            info_cmd.extend(['--remote-components', 'ejs:github'])
             # Add JavaScript runtime if available (required for YouTube)
             if deno_binary:
-                info_cmd.insert(1, '--js-runtimes')
-                info_cmd.insert(2, 'deno')
+                info_cmd.extend(['--js-runtimes', 'deno'])
+            # Add dump-json and no-download flags
+            info_cmd.extend(['--dump-json', '--no-download', url])
             
             try:
                 info_result = subprocess.run(
@@ -507,11 +515,14 @@ class YTDLPService:
         deno_binary = shutil.which("deno")
         
         # Use subprocess to get video info (following Python backend pattern)
-        cmd = [ytdlp_binary, '--dump-json', '--no-download', url]
+        cmd = [ytdlp_binary]
+        # Enable EJS challenge solver scripts from GitHub (must come before other options)
+        cmd.extend(['--remote-components', 'ejs:github'])
         # Add JavaScript runtime if available (required for YouTube)
         if deno_binary:
-            cmd.insert(1, '--js-runtimes')
-            cmd.insert(2, 'deno')
+            cmd.extend(['--js-runtimes', 'deno'])
+        # Add dump-json and no-download flags
+        cmd.extend(['--dump-json', '--no-download', url])
         
         try:
             # Get environment with ffmpeg in PATH
