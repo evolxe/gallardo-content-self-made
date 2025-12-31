@@ -623,6 +623,77 @@ async def download_scene_data(job_id: str, request: Request):
     )
 
 
+@router.post("/videos/download-audio-from-url")
+async def download_audio_from_url(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    url: str = Form(...),
+    output_filename: Optional[str] = Form(None),
+):
+    """
+    Download audio only from a video URL using yt-dlp.
+    
+    Downloads audio track from YouTube, Instagram, Vimeo, and other platforms supported by yt-dlp.
+    The audio is extracted and saved as MP3.
+    
+    Parameters (form-data):
+    - url: URL of the video to extract audio from (required)
+    - output_filename: Optional custom filename (without extension)
+    
+    Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
+    When completed, download the audio via GET /api/v1/videos/{job_id}/download
+    """
+    job_manager: JobManager = get_job_manager(request)
+    
+    # Validate URL
+    if not url or not url.strip():
+        raise HTTPException(status_code=400, detail="URL parameter is required")
+    
+    # Create job
+    job_id = job_manager.create_job(
+        job_type="ytdlp_audio_download",
+        parameters={
+            "url": url,
+            "audio_only": True,
+            "output_filename": output_filename,
+        },
+    )
+    
+    # Prepare output directory
+    output_dir = project_root / "temp_videos" / "output" / "ytdlp_downloads"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate output filename
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if output_filename:
+        safe_filename = "".join(c for c in output_filename if c.isalnum() or c in (' ', '-', '_')).strip()
+        output_path = output_dir / f"{safe_filename}.mp3"
+    else:
+        output_path = output_dir / f"audio_download_{timestamp}.mp3"
+    
+    # Start background processing
+    background_tasks.add_task(
+        process_ytdlp_download,
+        job_id=job_id,
+        url=url,
+        output_path=str(output_path),
+        quality="best",  # Not used for audio, but required parameter
+        format_type="mp3",
+        audio_only=True,  # This is the key parameter
+        output_filename=output_filename,
+        job_manager=job_manager,
+    )
+    
+    # Return job_id immediately
+    return {
+        "job_id": job_id,
+        "status": "pending",
+        "message": "Audio download started",
+        "status_url": f"/api/v1/jobs/{job_id}",
+        "download_url": f"/api/v1/videos/{job_id}/download",
+    }
+
+
 @router.post("/videos/download-from-url")
 async def download_video_from_url(
     background_tasks: BackgroundTasks,
@@ -1481,15 +1552,21 @@ async def merge_audio_and_video(
     background_tasks: BackgroundTasks,
     request: Request,
     video_url: Optional[str] = Form(None),
+    audio_url: Optional[str] = Form(None),
 ):
     """
-    Upload a video file (or provide URL) and an audio file, merge them together.
+    Upload a video file (or provide URL) and an audio file (or provide URL), merge them together.
     
     The longer of the two will be clipped to match the shorter duration.
     
-    Either:
-    - Upload a video file and an audio file with any field names (e.g., 'video', 'audio', 'file1', 'file2', etc.)
-    - OR provide a video_url parameter for the video and upload an audio file
+    Video input:
+    - Upload a video file with any field name (e.g., 'video', 'file', etc.)
+    - OR provide a video_url parameter with a URL to download from (YouTube, Instagram, etc.)
+    
+    Audio input:
+    - Upload an audio file with any field name (e.g., 'audio', 'file', etc.)
+    - OR provide an audio_url parameter with a URL to download audio from (YouTube, Instagram, etc.)
+      The audio will be extracted using yt-dlp with audio-only mode.
     
     The files/request must be sent as multipart/form-data.
     
@@ -1581,61 +1658,103 @@ async def merge_audio_and_video(
                 }
             )
     
-    # Find audio file in form data (audio must always be uploaded)
-    audio_file = None
-    audio_extensions = {'.mp3', '.wav', '.aac', '.m4a', '.ogg', '.flac', '.wma'}
+    # Handle audio input (from URL or file upload)
+    audio_path = None
+    audio_filename = None
+    uploaded_audio_file = None
     
-    for key, value in form.items():
-        is_upload_file = (
-            isinstance(value, UploadFile) or 
-            type(value).__name__ == "UploadFile" or
-            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
-        )
+    if audio_url:
+        # Download audio from URL using yt-dlp with audio_only=True
+        try:
+            # Prepare output directory for audio download
+            audio_download_dir = project_root / "temp_videos" / "uploads"
+            audio_download_dir.mkdir(parents=True, exist_ok=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            audio_output_path = audio_download_dir / f"merge_audio_download_{timestamp}.mp3"
+            
+            # Download audio using yt-dlp service
+            ytdlp_service = YTDLPService(output_dir=audio_download_dir)
+            result = ytdlp_service.download_video(
+                url=audio_url,
+                output_filename=f"merge_audio_download_{timestamp}",
+                quality="best",
+                format_type="mp3",
+                audio_only=True,  # This is the key - download audio only
+            )
+            
+            audio_path = Path(result["output_path"])
+            audio_filename = audio_path.name
+            
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Failed to download audio from URL: {str(e)}",
+                    "url": audio_url,
+                }
+            )
+    else:
+        # Find audio file in form data
+        audio_file = None
+        audio_extensions = {'.mp3', '.wav', '.aac', '.m4a', '.ogg', '.flac', '.wma'}
         
-        if is_upload_file and value != uploaded_video_file:  # Don't use same file as video
-            filename = getattr(value, 'filename', '')
-            ext = Path(filename).suffix.lower()
-            if ext in audio_extensions:
-                audio_file = value
-                break
-    
-    if not audio_file:
-        # Try to find any file as audio (skip the uploaded video file if it exists)
         for key, value in form.items():
             is_upload_file = (
                 isinstance(value, UploadFile) or 
                 type(value).__name__ == "UploadFile" or
                 (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
             )
-            if is_upload_file and value != uploaded_video_file:
-                audio_file = value
-                break
-    
-    if not audio_file:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "Audio file is required",
-                "help": "Upload an audio file (mp3, wav, aac, etc.) - video can come from video_url parameter or file upload"
-            }
-        )
-    
-    # Save uploaded audio file
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    audio_filename = audio_file.filename or "audio"
-    audio_path = upload_dir / f"merge_audio_{timestamp}_{audio_filename}"
-    
-    try:
-        if not video_path:
-            raise HTTPException(status_code=400, detail="Video input is required (either video_url or video file upload)")
+            
+            if is_upload_file and value != uploaded_video_file:  # Don't use same file as video
+                filename = getattr(value, 'filename', '')
+                ext = Path(filename).suffix.lower()
+                if ext in audio_extensions:
+                    audio_file = value
+                    uploaded_audio_file = value
+                    break
+        
+        if not audio_file:
+            # Try to find any file as audio (skip the uploaded video file if it exists)
+            for key, value in form.items():
+                is_upload_file = (
+                    isinstance(value, UploadFile) or 
+                    type(value).__name__ == "UploadFile" or
+                    (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
+                )
+                if is_upload_file and value != uploaded_video_file:
+                    audio_file = value
+                    uploaded_audio_file = value
+                    break
+        
+        if not audio_file:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Audio input is required",
+                    "help": "Either provide an audio_url parameter OR upload an audio file (mp3, wav, aac, etc.)"
+                }
+            )
+        
+        # Save uploaded audio file
+        upload_dir = project_root / "temp_videos" / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        audio_filename = audio_file.filename or "audio"
+        audio_path = upload_dir / f"merge_audio_{timestamp}_{audio_filename}"
         
         # Save uploaded audio
         with open(audio_path, "wb") as f:
             content = await audio_file.read()
             f.write(content)
+    
+    try:
+        if not video_path:
+            raise HTTPException(status_code=400, detail="Video input is required (either video_url or video file upload)")
+        
+        if not audio_path:
+            raise HTTPException(status_code=400, detail="Audio input is required (either audio_url or audio file upload)")
         
         # Create output path
         output_dir = project_root / "temp_videos" / "output" / "merge_audio_video"
@@ -1654,6 +1773,7 @@ async def merge_audio_and_video(
                 "video_filename": video_filename,
                 "audio_filename": audio_filename,
                 "video_url": video_url if video_url else None,
+                "audio_url": audio_url if audio_url else None,
             },
             output_path=output_path,
         )
@@ -1677,11 +1797,14 @@ async def merge_audio_and_video(
             "download_url": f"/api/v1/videos/{job_id}/download",
         }
     
+    except HTTPException:
+        # Re-raise HTTPExceptions (they're already properly formatted)
+        raise
     except Exception as e:
         # Clean up on error
-        if video_path.exists():
+        if video_path and video_path.exists():
             video_path.unlink()
-        if audio_path.exists():
+        if audio_path and audio_path.exists():
             audio_path.unlink()
         raise HTTPException(status_code=500, detail=f"Error processing files: {str(e)}")
 
