@@ -350,6 +350,7 @@ class YTDLPService:
         quality: str = "best",
         format_type: str = "mp4",
         audio_only: bool = False,
+        cookies_file: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Download a video from a URL using yt-dlp.
@@ -364,6 +365,7 @@ class YTDLPService:
             quality: Video quality ('best', 'worst', '720p', '1080p', etc.)
             format_type: Output format ('mp4', 'webm', etc.)
             audio_only: If True, download audio only (as mp3/m4a)
+            cookies_file: Optional path to cookies.txt file for authentication
             
         Returns:
             Dictionary with download information:
@@ -396,6 +398,10 @@ class YTDLPService:
         deno_binary = shutil.which("deno")
         if deno_binary:
             cmd.extend(['--js-runtimes', 'deno'])
+        
+        # Add cookies if provided (helps with bot detection and authentication)
+        if cookies_file and Path(cookies_file).exists():
+            cmd.extend(['--cookies', cookies_file])
         
         # Set output template
         if output_filename:
@@ -434,6 +440,9 @@ class YTDLPService:
             # Add JavaScript runtime if available (required for YouTube)
             if deno_binary:
                 info_cmd.extend(['--js-runtimes', 'deno'])
+            # Add cookies if provided (helps with bot detection and authentication)
+            if cookies_file and Path(cookies_file).exists():
+                info_cmd.extend(['--cookies', cookies_file])
             # Add dump-json and no-download flags
             info_cmd.extend(['--dump-json', '--no-download', url])
             
@@ -519,12 +528,13 @@ class YTDLPService:
         except Exception as e:
             raise Exception(f"Error downloading video: {str(e)}")
     
-    def get_video_info(self, url: str) -> Dict[str, Any]:
+    def get_video_info(self, url: str, cookies_file: Optional[str] = None) -> Dict[str, Any]:
         """
         Get video information without downloading using subprocess.
         
         Args:
             url: URL of the video
+            cookies_file: Optional path to cookies.txt file for authentication
             
         Returns:
             Dictionary with video information (title, duration, formats, etc.)
@@ -545,6 +555,9 @@ class YTDLPService:
         # Add JavaScript runtime if available (required for YouTube)
         if deno_binary:
             cmd.extend(['--js-runtimes', 'deno'])
+        # Add cookies if provided (helps with bot detection and authentication)
+        if cookies_file and Path(cookies_file).exists():
+            cmd.extend(['--cookies', cookies_file])
         # Add dump-json and no-download flags
         cmd.extend(['--dump-json', '--no-download', url])
         

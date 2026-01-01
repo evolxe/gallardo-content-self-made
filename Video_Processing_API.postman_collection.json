@@ -38,6 +38,18 @@
 							"key": "video",
 							"type": "file",
 							"src": []
+						},
+						{
+							"key": "video_url",
+							"value": "",
+							"type": "text",
+							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
 						}
 					]
 				},
@@ -71,9 +83,21 @@
 							"src": []
 						},
 						{
+							"key": "video_url",
+							"value": "",
+							"type": "text",
+							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
+						},
+						{
 							"key": "preset",
 							"value": "random",
 							"type": "text"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
 						}
 					]
 				},
@@ -107,6 +131,12 @@
 							"src": []
 						},
 						{
+							"key": "video_url",
+							"value": "",
+							"type": "text",
+							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
+						},
+						{
 							"key": "preset",
 							"value": "cinematic",
 							"type": "text",
@@ -129,6 +159,12 @@
 							"value": "1.0",
 							"type": "text",
 							"description": "Range: 0.0 to 2.0"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
 						}
 					]
 				},
@@ -160,6 +196,18 @@
 							"key": "video",
 							"type": "file",
 							"src": []
+						},
+						{
+							"key": "video_url",
+							"value": "",
+							"type": "text",
+							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
 						}
 					]
 				},
@@ -193,10 +241,22 @@
 							"src": []
 						},
 						{
+							"key": "video_url",
+							"value": "",
+							"type": "text",
+							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
+						},
+						{
 							"key": "output_size",
 							"value": "1080",
 							"type": "text",
 							"description": "Output square size in pixels (1080 = 1080x1080)"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
 						}
 					]
 				},
@@ -230,10 +290,22 @@
 							"src": []
 						},
 						{
+							"key": "video_url",
+							"value": "",
+							"type": "text",
+							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
+						},
+						{
 							"key": "output_size",
 							"value": "0",
 							"type": "text",
 							"description": "0 = keep original cropped resolution"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
 						}
 					]
 				},
@@ -267,6 +339,12 @@
 							"src": []
 						},
 						{
+							"key": "video_url",
+							"value": "",
+							"type": "text",
+							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
+						},
+						{
 							"key": "codec",
 							"value": "libx264",
 							"type": "text",
@@ -283,6 +361,12 @@
 							"value": "30",
 							"type": "text",
 							"description": "Target FPS (optional)"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
 						}
 					]
 				},
@@ -303,7 +387,7 @@
 			"response": []
 		},
 		{
-			"name": "Merge Audio and Video",
+			"name": "Merge Audio and Video (File Upload)",
 			"request": {
 				"method": "POST",
 				"header": [],
@@ -334,7 +418,157 @@
 						"merge-audio-video"
 					]
 				},
-				"description": "Merge an audio file with a video file. The longer of the two will be clipped to match the shorter duration."
+				"description": "Merge an audio file with a video file (both from file upload). The longer of the two will be clipped to match the shorter duration."
+			},
+			"response": []
+		},
+		{
+			"name": "Merge Audio and Video (URLs)",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "video_url",
+							"value": "https://www.youtube.com/watch?v=EXAMPLE",
+							"type": "text",
+							"description": "URL to download video from (YouTube, Instagram, etc.)"
+						},
+						{
+							"key": "audio_url",
+							"value": "https://www.youtube.com/watch?v=EXAMPLE",
+							"type": "text",
+							"description": "URL to download audio from (YouTube, Instagram, etc.)"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for authentication. Used for both video and audio downloads."
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/videos/merge-audio-video",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"videos",
+						"merge-audio-video"
+					]
+				},
+				"description": "Merge audio and video downloaded from URLs. Uses a single cookies file (if provided) for both video and audio downloads."
+			},
+			"response": []
+		},
+		{
+			"name": "Download Video from URL",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "url",
+							"value": "https://www.youtube.com/watch?v=EXAMPLE",
+							"type": "text",
+							"description": "URL to download video from (YouTube, Instagram, Vimeo, etc.)"
+						},
+						{
+							"key": "quality",
+							"value": "best",
+							"type": "text",
+							"description": "Video quality: 'best', 'worst', '720p', '1080p', etc."
+						},
+						{
+							"key": "format_type",
+							"value": "mp4",
+							"type": "text",
+							"description": "Output format: 'mp4', 'webm', etc."
+						},
+						{
+							"key": "audio_only",
+							"value": "false",
+							"type": "text",
+							"description": "If 'true', download audio only as MP3"
+						},
+						{
+							"key": "output_filename",
+							"value": "",
+							"type": "text",
+							"description": "Optional: Custom filename (without extension)"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for authentication"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/videos/download-from-url",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"videos",
+						"download-from-url"
+					]
+				},
+				"description": "Download a video from a URL using yt-dlp. Returns a job_id to poll for status."
+			},
+			"response": []
+		},
+		{
+			"name": "Download Audio from URL",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "url",
+							"value": "https://www.youtube.com/watch?v=EXAMPLE",
+							"type": "text",
+							"description": "URL to extract audio from (YouTube, Instagram, Vimeo, etc.)"
+						},
+						{
+							"key": "output_filename",
+							"value": "",
+							"type": "text",
+							"description": "Optional: Custom filename (without extension)"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for authentication"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/videos/download-audio-from-url",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"videos",
+						"download-audio-from-url"
+					]
+				},
+				"description": "Download audio only from a video URL. Extracts audio as MP3. Returns a job_id to poll for status."
 			},
 			"response": []
 		},
@@ -350,6 +584,12 @@
 							"key": "video",
 							"type": "file",
 							"src": []
+						},
+						{
+							"key": "video_url",
+							"value": "",
+							"type": "text",
+							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
 						},
 						{
 							"key": "audio",
@@ -416,6 +656,12 @@
 							"key": "fps",
 							"value": "30",
 							"type": "text"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
 						}
 					]
 				},
@@ -449,6 +695,12 @@
 							"src": []
 						},
 						{
+							"key": "video_url",
+							"value": "",
+							"type": "text",
+							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
+						},
+						{
 							"key": "color_grading",
 							"value": "true",
 							"type": "text"
@@ -467,6 +719,12 @@
 							"key": "crop_output_size",
 							"value": "1080",
 							"type": "text"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
 						}
 					]
 				},
@@ -500,6 +758,12 @@
 							"src": []
 						},
 						{
+							"key": "video_url",
+							"value": "",
+							"type": "text",
+							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
+						},
+						{
 							"key": "audio",
 							"type": "file",
 							"src": []
@@ -518,6 +782,12 @@
 							"key": "color_preset",
 							"value": "warm",
 							"type": "text"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
 						}
 					]
 				},
