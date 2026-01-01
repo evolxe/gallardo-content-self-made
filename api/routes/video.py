@@ -1624,6 +1624,11 @@ async def merge_audio_and_video(
                 video_url=video_url,
                 prefix="merge_video"
             )
+            
+            # If we also have audio_url, wait 10 seconds to avoid rate limiting
+            if audio_url and audio_url.strip():
+                await asyncio.sleep(10)
+                
         except Exception as e:
             raise HTTPException(
                 status_code=400,
