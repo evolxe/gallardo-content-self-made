@@ -1624,10 +1624,6 @@ async def merge_audio_and_video(
                 video_url=video_url,
                 prefix="merge_video"
             )
-            
-            # If we also have audio_url, wait 10 seconds to avoid rate limiting
-            if audio_url and audio_url.strip():
-                await asyncio.sleep(10)
                 
         except Exception as e:
             raise HTTPException(
@@ -1702,26 +1698,35 @@ async def merge_audio_and_video(
     
     # Now check if we have audio_url - if yes, download it; if no, look for file upload
     if audio_url and audio_url.strip():
-        # Download audio from URL using yt-dlp with audio_only=True
+        # Download audio from URL using yt-dlp with audio_only=True (same pattern as download-from-url)
         try:
             # Prepare output directory for audio download
             audio_download_dir = project_root / "temp_videos" / "uploads"
             audio_download_dir.mkdir(parents=True, exist_ok=True)
             
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            audio_output_path = audio_download_dir / f"merge_audio_download_{timestamp}.mp3"
+            audio_output_filename = f"merge_audio_download_{timestamp}"
+            audio_output_path = audio_download_dir / f"{audio_output_filename}.mp3"
             
-            # Download audio using yt-dlp service
+            # Initialize yt-dlp service (same as download-from-url)
             ytdlp_service = YTDLPService(output_dir=audio_download_dir)
-            result = ytdlp_service.download_video(
-                url=audio_url,
-                output_filename=f"merge_audio_download_{timestamp}",
-                quality="best",
-                format_type="mp3",
-                audio_only=True,  # This is the key - download audio only
+            
+            # Run download in executor to avoid blocking (same pattern as process_ytdlp_download)
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                ytdlp_service.download_video,
+                audio_url,
+                audio_output_filename,
+                "best",  # quality
+                "mp3",   # format_type
+                True,    # audio_only
             )
             
             audio_path = Path(result["output_path"])
+            if not audio_path.exists():
+                raise Exception("Downloaded audio file was not found")
+            
             audio_filename = audio_path.name
             
         except Exception as e:
