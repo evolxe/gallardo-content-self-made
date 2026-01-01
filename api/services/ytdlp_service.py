@@ -268,12 +268,12 @@ class YTDLPService:
     
     def _get_env_with_ffmpeg(self):
         """
-        Get environment variables with ffmpeg in PATH.
-        This ensures subprocess calls can find ffmpeg even if the Python
+        Get environment variables with ffmpeg and deno in PATH.
+        This ensures subprocess calls can find ffmpeg and deno even if the Python
         process was started before PATH was updated.
         
         Returns:
-            Dictionary of environment variables with ffmpeg in PATH
+            Dictionary of environment variables with ffmpeg and deno in PATH
         """
         env = os.environ.copy()
         current_path = env.get('PATH', '')
@@ -285,37 +285,61 @@ class YTDLPService:
             ffmpeg_dir = os.path.dirname(ffmpeg_bin)
             if ffmpeg_dir not in current_path:
                 env['PATH'] = current_path + separator + ffmpeg_dir
-            return env
+                current_path = env['PATH']
         
-        # If not found in PATH, check common locations
-        ffmpeg_paths = [
-            r"C:\Users\ACER\developer\ffmpeg-2025-12-28-git-9ab2a437a1-essentials_build\bin",
-            r"C:\ffmpeg\bin",
-            r"C:\Program Files\ffmpeg\bin",
-            r"C:\Program Files (x86)\ffmpeg\bin",
-        ]
+        # Also ensure deno is in PATH (required for YouTube audio extraction)
+        deno_bin = shutil.which("deno")
+        if deno_bin:
+            deno_dir = os.path.dirname(deno_bin)
+            if deno_dir not in current_path:
+                env['PATH'] = current_path + separator + deno_dir
+                current_path = env['PATH']
+        else:
+            # If not found, check common locations (especially for Docker/Render.com)
+            # In Dockerfile, we install deno to /usr/local/bin
+            common_deno_paths = [
+                "/usr/local/bin",  # Docker default location
+                "/root/.deno/bin",  # Deno default install location
+                r"C:\deno",  # Windows common location
+            ]
+            for deno_path in common_deno_paths:
+                if os.path.exists(deno_path):
+                    deno_exe = os.path.join(deno_path, "deno.exe" if os.name == 'nt' else "deno")
+                    if os.path.exists(deno_exe) and deno_path not in current_path:
+                        env['PATH'] = current_path + separator + deno_path
+                        current_path = env['PATH']
+                        break
         
-        # Also check system and user environment variables (may have been updated)
-        # On Windows, check user environment variable directly
-        if os.name == 'nt':
-            try:
-                import winreg
-                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment")
-                user_path = winreg.QueryValueEx(key, "Path")[0]
-                winreg.CloseKey(key)
-                if user_path and user_path not in current_path:
-                    env['PATH'] = current_path + separator + user_path
-                    current_path = env['PATH']
-            except (FileNotFoundError, OSError, ImportError):
-                pass
-        
-        # Check known locations and add if they exist
-        for ffmpeg_path in ffmpeg_paths:
-            if os.path.exists(ffmpeg_path):
-                exe_path = os.path.join(ffmpeg_path, "ffmpeg.exe" if os.name == 'nt' else "ffmpeg")
-                if os.path.exists(exe_path) and ffmpeg_path not in current_path:
-                    env['PATH'] = current_path + separator + ffmpeg_path
-                    break
+        # If ffmpeg not found in PATH, check common locations
+        if not ffmpeg_bin:
+            ffmpeg_paths = [
+                r"C:\Users\ACER\developer\ffmpeg-2025-12-28-git-9ab2a437a1-essentials_build\bin",
+                r"C:\ffmpeg\bin",
+                r"C:\Program Files\ffmpeg\bin",
+                r"C:\Program Files (x86)\ffmpeg\bin",
+            ]
+            
+            # Also check system and user environment variables (may have been updated)
+            # On Windows, check user environment variable directly
+            if os.name == 'nt':
+                try:
+                    import winreg
+                    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment")
+                    user_path = winreg.QueryValueEx(key, "Path")[0]
+                    winreg.CloseKey(key)
+                    if user_path and user_path not in current_path:
+                        env['PATH'] = current_path + separator + user_path
+                        current_path = env['PATH']
+                except (FileNotFoundError, OSError, ImportError):
+                    pass
+            
+            # Check known locations and add if they exist
+            for ffmpeg_path in ffmpeg_paths:
+                if os.path.exists(ffmpeg_path):
+                    exe_path = os.path.join(ffmpeg_path, "ffmpeg.exe" if os.name == 'nt' else "ffmpeg")
+                    if os.path.exists(exe_path) and ffmpeg_path not in current_path:
+                        env['PATH'] = current_path + separator + ffmpeg_path
+                        break
         
         return env
     
