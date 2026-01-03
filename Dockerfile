@@ -7,7 +7,7 @@ WORKDIR /app
 # Install system dependencies required for video processing
 # FFmpeg is required by MoviePy for video encoding/decoding
 # This installs FFmpeg system-wide via apt-get (standard Linux package manager)
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y nodejs npm \
     ffmpeg \
     libsm6 \
     libxext6 \
