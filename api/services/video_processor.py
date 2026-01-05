@@ -772,6 +772,8 @@ class VideoProcessor:
         color_contrast: float = 1.0,
         color_saturation: float = 1.0,
         crop_zoom: bool = False,
+        crop_aspect_ratio: Optional[str] = None,
+        crop_background_color: Optional[str] = None,
         crop_output_size: int = 1080,
         reencode: bool = False,
         codec: str = "libx264",
@@ -786,7 +788,7 @@ class VideoProcessor:
         2. Merge audio with video (if merge_audio is True)
         3. Remove audio (if remove_audio is True - overrides merge_audio)
         4. Color grading (if color_grading is True)
-        5. Crop and zoom to square (if crop_zoom is True)
+        5. Crop and zoom to specified aspect ratio, then pad to 9:16 with background color (if crop_zoom is True)
         6. Re-encode (if reencode is True, or always at the end to finalize)
         
         Args:
@@ -800,8 +802,10 @@ class VideoProcessor:
             color_brightness: Brightness adjustment (-1.0 to 1.0)
             color_contrast: Contrast adjustment (0.0 to 2.0)
             color_saturation: Saturation adjustment (0.0 to 2.0)
-            crop_zoom: If True, crop to center square
-            crop_output_size: Output square size (if crop_zoom is True)
+            crop_zoom: If True, crop to specified aspect ratio, then pad to 9:16 (1080x1920) with background color
+            crop_aspect_ratio: Desired crop aspect ratio in format "W:H" (e.g., "16:9", "1:1", "4:3"). Default: "1:1" if not provided
+            crop_background_color: Background color for padding (hex like "#000000" or named color). Default: Random if not provided
+            crop_output_size: Not used (kept for backward compatibility; output is always 9:16 format)
             reencode: If True, re-encode with specified settings
             codec: Video codec for re-encoding
             bitrate: Target bitrate for re-encoding
@@ -930,22 +934,133 @@ class VideoProcessor:
                 
                 video = video.with_updated_frame_function(apply_grading_to_frame)
             
-            # Step 3: Crop and zoom to square
+            # Step 3: Crop and zoom to specified aspect ratio, then pad to 9:16 with background color
             if crop_zoom:
+                # Default aspect ratio to 1:1 if not provided
+                if not crop_aspect_ratio:
+                    crop_aspect_ratio = "1:1"
+                
+                # Parse aspect ratio
+                try:
+                    parts = crop_aspect_ratio.split(":")
+                    if len(parts) != 2:
+                        raise ValueError("Aspect ratio must be in format 'W:H'")
+                    aspect_w = float(parts[0])
+                    aspect_h = float(parts[1])
+                    if aspect_w <= 0 or aspect_h <= 0:
+                        raise ValueError("Aspect ratio values must be positive")
+                    target_aspect = aspect_w / aspect_h
+                except (ValueError, ZeroDivisionError) as e:
+                    raise ValueError(f"Invalid aspect ratio format '{crop_aspect_ratio}': {str(e)}")
+                
+                # Parse background color
+                def parse_color(color_str: str) -> Tuple[int, int, int]:
+                    """Parse color string to RGB tuple."""
+                    color_str = color_str.strip().lower()
+                    
+                    # Named colors
+                    named_colors = {
+                        "black": (0, 0, 0),
+                        "white": (255, 255, 255),
+                        "red": (255, 0, 0),
+                        "green": (0, 255, 0),
+                        "blue": (0, 0, 255),
+                        "yellow": (255, 255, 0),
+                        "cyan": (0, 255, 255),
+                        "magenta": (255, 0, 255),
+                        "gray": (128, 128, 128),
+                        "grey": (128, 128, 128),
+                    }
+                    
+                    if color_str in named_colors:
+                        return named_colors[color_str]
+                    
+                    # Hex color
+                    if color_str.startswith("#"):
+                        hex_color = color_str[1:]
+                        if len(hex_color) == 6:
+                            try:
+                                r = int(hex_color[0:2], 16)
+                                g = int(hex_color[2:4], 16)
+                                b = int(hex_color[4:6], 16)
+                                return (r, g, b)
+                            except ValueError:
+                                pass
+                    
+                    raise ValueError(f"Invalid color format: {color_str}. Use hex (#RRGGBB) or named color.")
+                
+                # Default to random color if not provided
+                if not crop_background_color:
+                    bg_color_rgb = (
+                        random.randint(0, 255),
+                        random.randint(0, 255),
+                        random.randint(0, 255)
+                    )
+                else:
+                    bg_color_rgb = parse_color(crop_background_color)
+                
+                # Preserve audio before cropping
+                original_audio = video.audio
+                
+                # Get video dimensions
                 w, h = video.size
                 w, h = int(w), int(h)
-                square_size = min(w, h)
-                crop_x = (w - square_size) // 2
-                crop_y = (h - square_size) // 2
+                video_aspect = w / h
                 
-                video = video.with_effects([
-                    vfx.Crop(x1=crop_x, y1=crop_y, x2=crop_x + square_size, y2=crop_y + square_size)
+                # Calculate crop dimensions for desired aspect ratio
+                if video_aspect > target_aspect:
+                    # Video is wider than target - crop width
+                    crop_h = h
+                    crop_w = int(h * target_aspect)
+                    crop_x = (w - crop_w) // 2
+                    crop_y = 0
+                else:
+                    # Video is taller than target - crop height
+                    crop_w = w
+                    crop_h = int(w / target_aspect)
+                    crop_x = 0
+                    crop_y = (h - crop_h) // 2
+                
+                # Crop to desired aspect ratio
+                cropped_video = video.with_effects([
+                    vfx.Crop(x1=crop_x, y1=crop_y, x2=crop_x + crop_w, y2=crop_y + crop_h)
                 ])
                 
-                if crop_output_size and crop_output_size > 0 and crop_output_size != square_size:
-                    video = video.with_effects([
-                        vfx.Resize((crop_output_size, crop_output_size))
-                    ])
+                # Calculate 9:16 output dimensions (1080x1920)
+                output_width = 1080
+                output_height = 1920
+                
+                # Calculate scale to fit cropped video into 9:16 frame
+                # Use the smaller scale to ensure the video fits entirely within the frame
+                scale_w = output_width / crop_w
+                scale_h = output_height / crop_h
+                scale = min(scale_w, scale_h)
+                scaled_w = int(crop_w * scale)
+                scaled_h = int(crop_h * scale)
+                
+                # Scale the cropped video
+                scaled_video = cropped_video.with_effects([
+                    vfx.Resize((scaled_w, scaled_h))
+                ])
+                
+                # Create background (9:16 frame with background color)
+                bg_array = np.full((output_height, output_width, 3), bg_color_rgb, dtype=np.uint8)
+                background = ImageClip(bg_array).with_duration(video.duration)
+                
+                # Composite: place scaled video on background (centered)
+                video = CompositeVideoClip(
+                    [background, scaled_video.with_position("center")],
+                    size=(output_width, output_height)
+                )
+                
+                # Preserve audio if present
+                if original_audio is not None:
+                    video = video.with_audio(original_audio)
+                
+                # Clean up intermediate clips
+                cropped_video.close()
+                scaled_video.close()
+                background.close()
             
             # Step 4: Apply FPS change if reencoding with FPS
             if reencode and fps and fps > 0:

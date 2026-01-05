@@ -2175,6 +2175,8 @@ async def process_video_comprehensive(
     color_contrast: Optional[float] = Form(1.0),
     color_saturation: Optional[float] = Form(1.0),
     crop_zoom: Optional[bool] = Form(False),
+    crop_aspect_ratio: Optional[str] = Form(None),
+    crop_background_color: Optional[str] = Form(None),
     crop_output_size: Optional[int] = Form(1080),
     reencode: Optional[bool] = Form(False),
     codec: Optional[str] = Form("libx264"),
@@ -2191,7 +2193,7 @@ async def process_video_comprehensive(
     1. Merge audio (if merge_audio=True and audio file provided)
     2. Remove audio (if remove_audio=True, overrides merge_audio)
     3. Color grading (if color_grading=True)
-    4. Crop and zoom to square (if crop_zoom=True)
+    4. Crop and zoom to specified aspect ratio, then pad to 9:16 with background color (if crop_zoom=True)
     5. Re-encode (if reencode=True)
     
     Either:
@@ -2204,7 +2206,7 @@ async def process_video_comprehensive(
     - remove_audio: Remove audio track from video
     - merge_audio: Merge audio file with video (requires audio file upload)
     - color_grading: Apply color grading
-    - crop_zoom: Crop to center 1:1 square aspect ratio
+    - crop_zoom: Crop to specified aspect ratio, then pad to 9:16 (1080x1920) with background color
     - reencode: Re-encode video with specified codec/bitrate/fps
     
     Color Grading Parameters (if color_grading=True):
@@ -2214,7 +2216,13 @@ async def process_video_comprehensive(
     - color_saturation: Saturation adjustment (0.0 to 2.0)
     
     Crop Parameters (if crop_zoom=True):
-    - crop_output_size: Output square size in pixels (default: 1080)
+    - crop_aspect_ratio: Desired crop aspect ratio in format "W:H" (e.g., "16:9", "1:1", "4:3", "21:9")
+                        Default: "1:1" (square) if not provided
+    - crop_background_color: Background color for padding when aspect ratio is not 9:16
+                            Can be hex format (e.g., "#000000" for black, "#FFFFFF" for white)
+                            or named colors (black, white, red, green, blue, yellow, cyan, magenta, gray)
+                            Default: Random color if not provided
+    - crop_output_size: Not used (kept for backward compatibility; output is always 9:16 format 1080x1920)
     
     Re-encode Parameters (if reencode=True):
     - codec: Video codec (default: "libx264")
@@ -2259,6 +2267,44 @@ async def process_video_comprehensive(
     
     # Generate timestamp once for use throughout the function
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    
+    # Validate crop parameters if crop_zoom is enabled
+    if crop_zoom:
+        # Default aspect_ratio to 1:1 if not provided
+        if not crop_aspect_ratio:
+            crop_aspect_ratio = "1:1"
+        
+        # Validate aspect_ratio format
+        try:
+            parts = crop_aspect_ratio.split(":")
+            if len(parts) != 2:
+                raise ValueError("Aspect ratio must be in format 'W:H'")
+            float(parts[0])
+            float(parts[1])
+        except (ValueError, IndexError):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid crop_aspect_ratio format '{crop_aspect_ratio}'. Use format 'W:H' (e.g., '16:9', '1:1')"
+            )
+        
+        # Pick random background color if not provided
+        if not crop_background_color:
+            import random
+            colors = [
+                "#000000",  # black
+                "#FFFFFF",  # white
+                "#FF0000",  # red
+                "#00FF00",  # green
+                "#0000FF",  # blue
+                "#FFFF00",  # yellow
+                "#00FFFF",  # cyan
+                "#FF00FF",  # magenta
+                "#808080",  # gray
+                "#FFA500",  # orange
+                "#800080",  # purple
+                "#FFC0CB",  # pink
+            ]
+            crop_background_color = random.choice(colors)
     
     try:
         # Get video input (from URL or file upload)
@@ -2324,7 +2370,8 @@ async def process_video_comprehensive(
         if color_grading:
             operations.append(f"graded_{color_preset}")
         if crop_zoom:
-            operations.append(f"square_{crop_output_size}")
+            aspect_str = crop_aspect_ratio if crop_aspect_ratio else "1:1"
+            operations.append(f"cropping to {aspect_str} and padding to 9:16")
         if reencode:
             operations.append(f"reencoded_{codec}")
         
@@ -2350,6 +2397,8 @@ async def process_video_comprehensive(
                 "color_contrast": color_contrast,
                 "color_saturation": color_saturation,
                 "crop_zoom": crop_zoom,
+                "crop_aspect_ratio": crop_aspect_ratio if crop_zoom else None,
+                "crop_background_color": crop_background_color if crop_zoom else None,
                 "crop_output_size": crop_output_size,
                 "reencode": reencode,
                 "codec": codec,
@@ -2374,6 +2423,8 @@ async def process_video_comprehensive(
             color_contrast=color_contrast,
             color_saturation=color_saturation,
             crop_zoom=crop_zoom,
+            crop_aspect_ratio=crop_aspect_ratio if crop_zoom else None,
+            crop_background_color=crop_background_color if crop_zoom else None,
             crop_output_size=crop_output_size,
             reencode=reencode,
             codec=codec,
@@ -2391,7 +2442,8 @@ async def process_video_comprehensive(
         if color_grading:
             applied_operations.append(f"color_grading({color_preset})")
         if crop_zoom:
-            applied_operations.append(f"crop_zoom({crop_output_size}x{crop_output_size})")
+            aspect_str = crop_aspect_ratio if crop_aspect_ratio else "1:1"
+            applied_operations.append(f"crop_zoom({aspect_str} -> 9:16)")
         if reencode:
             applied_operations.append(f"reencode({codec})")
         
@@ -2426,6 +2478,8 @@ async def process_comprehensive(
     color_contrast: float,
     color_saturation: float,
     crop_zoom: bool,
+    crop_aspect_ratio: Optional[str],
+    crop_background_color: Optional[str],
     crop_output_size: int,
     reencode: bool,
     codec: str,
@@ -2455,7 +2509,8 @@ async def process_comprehensive(
         if color_grading:
             operations.append(f"color grading ({color_preset})")
         if crop_zoom:
-            operations.append(f"cropping to square ({crop_output_size}x{crop_output_size})")
+            aspect_str = crop_aspect_ratio if crop_aspect_ratio else "1:1"
+            operations.append(f"cropping to {aspect_str} and padding to 9:16 (1080x1920)")
         if reencode:
             operations.append(f"re-encoding ({codec})")
         
@@ -2484,6 +2539,8 @@ async def process_comprehensive(
             color_contrast,
             color_saturation,
             crop_zoom,
+            crop_aspect_ratio,
+            crop_background_color,
             crop_output_size,
             reencode,
             codec,
