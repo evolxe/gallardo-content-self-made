@@ -2253,6 +2253,13 @@ async def process_video_comprehensive(
     except Exception:
         pass
     
+    # Initialize variables for cleanup in exception handler
+    input_video_path = None
+    input_audio_path = None
+    
+    # Generate timestamp once for use throughout the function
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    
     try:
         # Get video input (from URL or file upload)
         input_video_path, video_filename = await get_video_input(
@@ -2297,7 +2304,6 @@ async def process_video_comprehensive(
             # Save audio file
             upload_dir = project_root / "temp_videos" / "uploads"
             upload_dir.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             audio_filename = audio_file.filename or "audio"
             input_audio_path = upload_dir / f"process_audio_{timestamp}_{audio_filename}"
             
@@ -2400,7 +2406,7 @@ async def process_video_comprehensive(
     
     except Exception as e:
         # Clean up on error
-        if input_video_path.exists():
+        if input_video_path and input_video_path.exists():
             input_video_path.unlink()
         if input_audio_path and input_audio_path.exists():
             input_audio_path.unlink()
