@@ -1,946 +1,719 @@
 {
 	"info": {
-		"_postman_id": "video-processing-api-collection",
-		"name": "Video Processing API",
-		"description": "Comprehensive video processing API with multiple endpoints for video manipulation",
+		"_postman_id": "video-processing-api-collection-v2",
+		"name": "Video Processing API - Complete",
+		"description": "Comprehensive video processing API with all endpoints. Supports video downloads, processing, and job management. All endpoints use multipart/form-data for file uploads.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
 		"_exporter_id": "video-processing"
 	},
 	"item": [
 		{
-			"name": "Health Check",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "{{base_url}}/api/v1/health",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"health"
-					]
+			"name": "Health & Status",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/health",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "health"]
+						},
+						"description": "Check if the API is running and healthy."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Job Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/jobs/{{job_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "jobs", "{{job_id}}"]
+						},
+						"description": "Get the status of a specific job by job_id. Use this to poll for processing completion. Returns job information including status, progress, and output path if completed."
+					},
+					"response": []
+				},
+				{
+					"name": "List All Jobs",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/jobs?status=completed&limit=100",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "jobs"],
+							"query": [
+								{
+									"key": "status",
+									"value": "completed",
+									"description": "Optional: Filter by status (pending, processing, completed, failed)",
+									"disabled": false
+								},
+								{
+									"key": "limit",
+									"value": "100",
+									"description": "Optional: Maximum number of jobs to return (1-1000). Default: 100",
+									"disabled": false
+								}
+							]
+						},
+						"description": "List all jobs, optionally filtered by status. Returns a list of jobs sorted by creation time (newest first)."
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Job",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/jobs/{{job_id}}",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "jobs", "{{job_id}}"]
+						},
+						"description": "Delete a job from the system. Note: This does not delete the output file, only the job record."
+					},
+					"response": []
 				}
-			},
-			"response": []
+			]
 		},
 		{
-			"name": "Remove Audio",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "video",
-							"type": "file",
-							"src": []
+			"name": "Video Downloads",
+			"item": [
+				{
+					"name": "Download Video from URL",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "url",
+									"value": "https://www.youtube.com/watch?v=EXAMPLE",
+									"type": "text",
+									"description": "REQUIRED: URL of the video to download (YouTube, Instagram, Vimeo, etc.)"
+								},
+								{
+									"key": "quality",
+									"value": "best",
+									"type": "text",
+									"description": "Optional: Video quality ('best', 'worst', '720p', '1080p', etc.). Default: 'best'"
+								},
+								{
+									"key": "format_type",
+									"value": "mp4",
+									"type": "text",
+									"description": "Optional: Output format ('mp4', 'webm', etc.). Default: 'mp4'"
+								},
+								{
+									"key": "audio_only",
+									"value": "false",
+									"type": "text",
+									"description": "Optional: If 'true', download audio only as MP3. Default: 'false'"
+								},
+								{
+									"key": "output_filename",
+									"value": "",
+									"type": "text",
+									"description": "Optional: Custom filename (without extension)"
+								}
+							]
 						},
-						{
-							"key": "video_url",
-							"value": "",
-							"type": "text",
-							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/download-from-url",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "download-from-url"]
 						},
-						{
-							"key": "cookies_file",
-							"type": "file",
-							"src": [],
-							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
-						}
-					]
+						"description": "Download a video from a URL using yt-dlp. Supports YouTube (via pytube), Vimeo, and other platforms. Returns a job_id to poll for status."
+					},
+					"response": []
 				},
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/remove-audio",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"remove-audio"
-					]
-				},
-				"description": "Upload a video and remove its audio track. Accepts any field name for the file."
-			},
-			"response": []
+				{
+					"name": "Download Audio from URL",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "url",
+									"value": "https://www.youtube.com/watch?v=EXAMPLE",
+									"type": "text",
+									"description": "REQUIRED: URL of the video to extract audio from (YouTube, Instagram, Vimeo, etc.)"
+								},
+								{
+									"key": "output_filename",
+									"value": "",
+									"type": "text",
+									"description": "Optional: Custom filename (without extension)"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/download-audio-from-url",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "download-audio-from-url"]
+						},
+						"description": "Download audio only from a video URL. Extracts audio as MP3. Returns a job_id to poll for status."
+					},
+					"response": []
+				}
+			]
 		},
 		{
-			"name": "Color Grade (Random)",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "video",
-							"type": "file",
-							"src": []
+			"name": "Video Processing",
+			"item": [
+				{
+					"name": "Remove Audio",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "video",
+									"type": "file",
+									"src": [],
+									"description": "Optional: Upload video file (any field name accepted: 'video', 'file', 'upload', etc.)"
+								},
+								{
+									"key": "video_url",
+									"value": "",
+									"type": "text",
+									"description": "Optional: URL to download video from (YouTube, Instagram, etc.). Either file upload OR video_url required."
+								}
+							]
 						},
-						{
-							"key": "video_url",
-							"value": "",
-							"type": "text",
-							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/remove-audio",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "remove-audio"]
 						},
-						{
-							"key": "preset",
-							"value": "random",
-							"type": "text"
-						},
-						{
-							"key": "cookies_file",
-							"type": "file",
-							"src": [],
-							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
-						}
-					]
+						"description": "Upload a video (or provide URL) and remove its audio track. Either upload a file OR provide video_url. Returns a job_id immediately."
+					},
+					"response": []
 				},
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/color-grade",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"color-grade"
-					]
+				{
+					"name": "Detect Scenes",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "video",
+									"type": "file",
+									"src": [],
+									"description": "Optional: Upload video file (any field name accepted)"
+								},
+								{
+									"key": "video_url",
+									"value": "",
+									"type": "text",
+									"description": "Optional: URL to download video from. Either file upload OR video_url required."
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/detect-scenes",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "detect-scenes"]
+						},
+						"description": "Upload a video (or provide URL) and detect scene cuts. Returns a job_id. When completed, use GET /api/v1/videos/{job_id}/scenes to get scene information."
+					},
+					"response": []
 				},
-				"description": "Apply random color grading to a video. Default preset is 'random'."
-			},
-			"response": []
+				{
+					"name": "Color Grade (Random)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "video",
+									"type": "file",
+									"src": [],
+									"description": "Optional: Upload video file"
+								},
+								{
+									"key": "video_url",
+									"value": "",
+									"type": "text",
+									"description": "Optional: URL to download video from"
+								},
+								{
+									"key": "preset",
+									"value": "random",
+									"type": "text",
+									"description": "Optional: Color grading preset. Default: 'random'. Options: cinematic, warm, cool, vintage, vivid, bw, natural, random"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/color-grade",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "color-grade"]
+						},
+						"description": "Apply random color grading to a video. When preset is 'random', brightness, contrast, and saturation are randomly generated."
+					},
+					"response": []
+				},
+				{
+					"name": "Color Grade (Specific Preset)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "video",
+									"type": "file",
+									"src": [],
+									"description": "Optional: Upload video file"
+								},
+								{
+									"key": "video_url",
+									"value": "",
+									"type": "text",
+									"description": "Optional: URL to download video from"
+								},
+								{
+									"key": "preset",
+									"value": "cinematic",
+									"type": "text",
+									"description": "Optional: Color grading preset. Options: cinematic, warm, cool, vintage, vivid, bw, natural, random. Default: 'random'"
+								},
+								{
+									"key": "brightness",
+									"value": "0.0",
+									"type": "text",
+									"description": "Optional: Brightness adjustment (-1.0 to 1.0). Default: 0.0"
+								},
+								{
+									"key": "contrast",
+									"value": "1.0",
+									"type": "text",
+									"description": "Optional: Contrast adjustment (0.0 to 2.0). Default: 1.0"
+								},
+								{
+									"key": "saturation",
+									"value": "1.0",
+									"type": "text",
+									"description": "Optional: Saturation adjustment (0.0 to 2.0). Default: 1.0"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/color-grade",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "color-grade"]
+						},
+						"description": "Apply specific color grading preset to a video with custom adjustments. If preset is not 'random' and parameters are None, defaults are used."
+					},
+					"response": []
+				},
+				{
+					"name": "Crop and Zoom",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "video",
+									"type": "file",
+									"src": [],
+									"description": "Optional: Upload video file"
+								},
+								{
+									"key": "video_url",
+									"value": "",
+									"type": "text",
+									"description": "Optional: URL to download video from"
+								},
+								{
+									"key": "aspect_ratio",
+									"value": "1:1",
+									"type": "text",
+									"description": "Optional: Desired crop aspect ratio in format 'W:H' (e.g., '16:9', '1:1', '4:3', '21:9'). Default: '1:1'"
+								},
+								{
+									"key": "background_color",
+									"value": "",
+									"type": "text",
+									"description": "Optional: Background color for padding. Hex format (e.g., '#000000', '#FFFFFF') or named colors (black, white, red, green, blue, yellow, cyan, magenta, gray). Default: Random color"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/crop-zoom",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "crop-zoom"]
+						},
+						"description": "Crop video to specified aspect ratio and output as 9:16 (1080x1920). If cropped aspect ratio is not 9:16, video is scaled to fit and padded with background color."
+					},
+					"response": []
+				},
+				{
+					"name": "Re-encode Video",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "video",
+									"type": "file",
+									"src": [],
+									"description": "Optional: Upload video file"
+								},
+								{
+									"key": "video_url",
+									"value": "",
+									"type": "text",
+									"description": "Optional: URL to download video from"
+								},
+								{
+									"key": "codec",
+									"value": "libx264",
+									"type": "text",
+									"description": "Optional: Video codec (e.g., 'libx264', 'libx265'). Default: 'libx264'"
+								},
+								{
+									"key": "bitrate",
+									"value": "",
+									"type": "text",
+									"description": "Optional: Target bitrate in kbps format (e.g., '5000k')"
+								},
+								{
+									"key": "fps",
+									"value": "",
+									"type": "text",
+									"description": "Optional: Target FPS. Uses original FPS if not specified"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/reencode",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "reencode"]
+						},
+						"description": "Re-encode video with specified codec, bitrate, and FPS settings."
+					},
+					"response": []
+				},
+				{
+					"name": "Merge Audio and Video",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "video",
+									"type": "file",
+									"src": [],
+									"description": "Optional: Upload video file (any field name accepted)"
+								},
+								{
+									"key": "video_url",
+									"value": "",
+									"type": "text",
+									"description": "Optional: URL to download video from. Either video file upload OR video_url required."
+								},
+								{
+									"key": "audio",
+									"type": "file",
+									"src": [],
+									"description": "Optional: Upload audio file (mp3, wav, aac, etc.)"
+								},
+								{
+									"key": "audio_url",
+									"value": "",
+									"type": "text",
+									"description": "Optional: URL to download audio from. Either audio file upload OR audio_url required."
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/merge-audio-video",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "merge-audio-video"]
+						},
+						"description": "Merge an audio file with a video file. Both can be uploaded as files or provided as URLs. The longer of the two will be clipped to match the shorter duration."
+					},
+					"response": []
+				}
+			]
 		},
 		{
-			"name": "Color Grade (Specific Preset)",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "video",
-							"type": "file",
-							"src": []
+			"name": "Comprehensive Processing",
+			"item": [
+				{
+					"name": "Comprehensive - All Operations",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "video",
+									"type": "file",
+									"src": [],
+									"description": "Optional: Upload video file"
+								},
+								{
+									"key": "video_url",
+									"value": "",
+									"type": "text",
+									"description": "Optional: URL to download video from"
+								},
+								{
+									"key": "audio",
+									"type": "file",
+									"src": [],
+									"description": "Optional: Upload audio file (required if merge_audio=true)"
+								},
+								{
+									"key": "remove_audio",
+									"value": "false",
+									"type": "text",
+									"description": "Optional: Remove audio track (boolean: 'true' or 'false'). Default: false"
+								},
+								{
+									"key": "merge_audio",
+									"value": "false",
+									"type": "text",
+									"description": "Optional: Merge audio file with video (boolean: 'true' or 'false'). Requires audio file upload. Default: false"
+								},
+								{
+									"key": "color_grading",
+									"value": "false",
+									"type": "text",
+									"description": "Optional: Apply color grading (boolean: 'true' or 'false'). Default: false"
+								},
+								{
+									"key": "color_preset",
+									"value": "cinematic",
+									"type": "text",
+									"description": "Optional: Color grading preset (if color_grading=true). Options: cinematic, warm, cool, vintage, vivid, bw, natural, random. Default: 'cinematic'"
+								},
+								{
+									"key": "color_brightness",
+									"value": "0.0",
+									"type": "text",
+									"description": "Optional: Brightness adjustment -1.0 to 1.0 (if color_grading=true). Default: 0.0"
+								},
+								{
+									"key": "color_contrast",
+									"value": "1.0",
+									"type": "text",
+									"description": "Optional: Contrast adjustment 0.0 to 2.0 (if color_grading=true). Default: 1.0"
+								},
+								{
+									"key": "color_saturation",
+									"value": "1.0",
+									"type": "text",
+									"description": "Optional: Saturation adjustment 0.0 to 2.0 (if color_grading=true). Default: 1.0"
+								},
+								{
+									"key": "crop_zoom",
+									"value": "false",
+									"type": "text",
+									"description": "Optional: Crop to aspect ratio and pad to 9:16 (boolean: 'true' or 'false'). Default: false"
+								},
+								{
+									"key": "crop_aspect_ratio",
+									"value": "1:1",
+									"type": "text",
+									"description": "Optional: Crop aspect ratio in format 'W:H' (if crop_zoom=true). Default: '1:1'"
+								},
+								{
+									"key": "crop_background_color",
+									"value": "",
+									"type": "text",
+									"description": "Optional: Background color for padding (if crop_zoom=true). Hex or named color. Default: Random"
+								},
+								{
+									"key": "crop_output_size",
+									"value": "1080",
+									"type": "text",
+									"description": "Optional: Not used (kept for backward compatibility). Output is always 9:16 (1080x1920)"
+								},
+								{
+									"key": "reencode",
+									"value": "false",
+									"type": "text",
+									"description": "Optional: Re-encode video (boolean: 'true' or 'false'). Default: false"
+								},
+								{
+									"key": "codec",
+									"value": "libx264",
+									"type": "text",
+									"description": "Optional: Video codec (if reencode=true). Default: 'libx264'"
+								},
+								{
+									"key": "bitrate",
+									"value": "",
+									"type": "text",
+									"description": "Optional: Target bitrate in kbps format, e.g., '5000k' (if reencode=true)"
+								},
+								{
+									"key": "fps",
+									"value": "",
+									"type": "text",
+									"description": "Optional: Target FPS (if reencode=true)"
+								}
+							]
 						},
-						{
-							"key": "video_url",
-							"value": "",
-							"type": "text",
-							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/process",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "process"]
 						},
-						{
-							"key": "preset",
-							"value": "cinematic",
-							"type": "text",
-							"description": "Options: cinematic, warm, cool, vintage, vivid, bw, natural, random"
-						},
-						{
-							"key": "brightness",
-							"value": "0.0",
-							"type": "text",
-							"description": "Range: -1.0 to 1.0"
-						},
-						{
-							"key": "contrast",
-							"value": "1.0",
-							"type": "text",
-							"description": "Range: 0.0 to 2.0"
-						},
-						{
-							"key": "saturation",
-							"value": "1.0",
-							"type": "text",
-							"description": "Range: 0.0 to 2.0"
-						},
-						{
-							"key": "cookies_file",
-							"type": "file",
-							"src": [],
-							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
-						}
-					]
+						"description": "Apply multiple video processing operations in one request. Operations are applied in sequence: 1) Merge audio (if merge_audio=true), 2) Remove audio (if remove_audio=true, overrides merge_audio), 3) Color grading (if color_grading=true), 4) Crop and zoom (if crop_zoom=true), 5) Re-encode (if reencode=true)."
+					},
+					"response": []
 				},
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/color-grade",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"color-grade"
-					]
-				},
-				"description": "Apply specific color grading preset to a video with custom adjustments."
-			},
-			"response": []
+				{
+					"name": "Comprehensive - Color Grade + Crop",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "video",
+									"type": "file",
+									"src": [],
+									"description": "Optional: Upload video file"
+								},
+								{
+									"key": "video_url",
+									"value": "",
+									"type": "text",
+									"description": "Optional: URL to download video from"
+								},
+								{
+									"key": "color_grading",
+									"value": "true",
+									"type": "text",
+									"description": "REQUIRED: Set to 'true' to enable color grading"
+								},
+								{
+									"key": "color_preset",
+									"value": "random",
+									"type": "text",
+									"description": "Optional: Color preset. Default: 'cinematic'"
+								},
+								{
+									"key": "crop_zoom",
+									"value": "true",
+									"type": "text",
+									"description": "REQUIRED: Set to 'true' to enable crop and zoom"
+								},
+								{
+									"key": "crop_aspect_ratio",
+									"value": "16:9",
+									"type": "text",
+									"description": "Optional: Crop aspect ratio. Default: '1:1'"
+								},
+								{
+									"key": "crop_background_color",
+									"value": "#000000",
+									"type": "text",
+									"description": "Optional: Background color. Default: Random"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/process",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "process"]
+						},
+						"description": "Example: Apply color grading and crop to square in one request."
+					},
+					"response": []
+				}
+			]
 		},
 		{
-			"name": "Detect Scenes",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "video",
-							"type": "file",
-							"src": []
+			"name": "Downloads & Results",
+			"item": [
+				{
+					"name": "Download Processed Video",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/{{job_id}}/download",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "{{job_id}}", "download"]
 						},
-						{
-							"key": "video_url",
-							"value": "",
-							"type": "text",
-							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
-						},
-						{
-							"key": "cookies_file",
-							"type": "file",
-							"src": [],
-							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
-						}
-					]
+						"description": "Download the processed video file. Only works for completed jobs with video output."
+					},
+					"response": []
 				},
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/detect-scenes",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"detect-scenes"
-					]
+				{
+					"name": "Get Scene Detection Results",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/{{job_id}}/scenes",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "{{job_id}}", "scenes"]
+						},
+						"description": "Get scene detection results as JSON. Only works for completed scene detection jobs. Returns scene information including timestamps."
+					},
+					"response": []
 				},
-				"description": "Detect scene cuts in a video and return timestamps for each scene."
-			},
-			"response": []
-		},
-		{
-			"name": "Crop and Zoom (1080x1080)",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "video",
-							"type": "file",
-							"src": []
+				{
+					"name": "Download Scene Data (JSON)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/{{job_id}}/scenes/download",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "{{job_id}}", "scenes", "download"]
 						},
-						{
-							"key": "video_url",
-							"value": "",
-							"type": "text",
-							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
-						},
-						{
-							"key": "output_size",
-							"value": "1080",
-							"type": "text",
-							"description": "Output square size in pixels (1080 = 1080x1080)"
-						},
-						{
-							"key": "cookies_file",
-							"type": "file",
-							"src": [],
-							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
-						}
-					]
-				},
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/crop-zoom",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"crop-zoom"
-					]
-				},
-				"description": "Crop video to center 1:1 (square) aspect ratio. Default output size is 1080x1080."
-			},
-			"response": []
-		},
-		{
-			"name": "Crop and Zoom (Original Size)",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "video",
-							"type": "file",
-							"src": []
-						},
-						{
-							"key": "video_url",
-							"value": "",
-							"type": "text",
-							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
-						},
-						{
-							"key": "output_size",
-							"value": "0",
-							"type": "text",
-							"description": "0 = keep original cropped resolution"
-						},
-						{
-							"key": "cookies_file",
-							"type": "file",
-							"src": [],
-							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
-						}
-					]
-				},
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/crop-zoom",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"crop-zoom"
-					]
-				},
-				"description": "Crop video to center square and keep original cropped resolution."
-			},
-			"response": []
-		},
-		{
-			"name": "Re-encode Video",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "video",
-							"type": "file",
-							"src": []
-						},
-						{
-							"key": "video_url",
-							"value": "",
-							"type": "text",
-							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
-						},
-						{
-							"key": "codec",
-							"value": "libx264",
-							"type": "text",
-							"description": "Video codec (e.g., libx264, libx265)"
-						},
-						{
-							"key": "bitrate",
-							"value": "5000k",
-							"type": "text",
-							"description": "Target bitrate in kbps format (e.g., 5000k)"
-						},
-						{
-							"key": "fps",
-							"value": "30",
-							"type": "text",
-							"description": "Target FPS (optional)"
-						},
-						{
-							"key": "cookies_file",
-							"type": "file",
-							"src": [],
-							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
-						}
-					]
-				},
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/reencode",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"reencode"
-					]
-				},
-				"description": "Re-encode video with specified codec, bitrate, and FPS settings."
-			},
-			"response": []
-		},
-		{
-			"name": "Merge Audio and Video (File Upload)",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "video",
-							"type": "file",
-							"src": []
-						},
-						{
-							"key": "audio",
-							"type": "file",
-							"src": []
-						}
-					]
-				},
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/merge-audio-video",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"merge-audio-video"
-					]
-				},
-				"description": "Merge an audio file with a video file (both from file upload). The longer of the two will be clipped to match the shorter duration."
-			},
-			"response": []
-		},
-		{
-			"name": "Merge Audio and Video (URLs)",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "video_url",
-							"value": "https://www.youtube.com/watch?v=EXAMPLE",
-							"type": "text",
-							"description": "URL to download video from (YouTube, Instagram, etc.)"
-						},
-						{
-							"key": "audio_url",
-							"value": "https://www.youtube.com/watch?v=EXAMPLE",
-							"type": "text",
-							"description": "URL to download audio from (YouTube, Instagram, etc.)"
-						},
-						{
-							"key": "cookies_file",
-							"type": "file",
-							"src": [],
-							"description": "Optional: Cookies file (Netscape format) for authentication. Used for both video and audio downloads."
-						}
-					]
-				},
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/merge-audio-video",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"merge-audio-video"
-					]
-				},
-				"description": "Merge audio and video downloaded from URLs. Uses a single cookies file (if provided) for both video and audio downloads."
-			},
-			"response": []
-		},
-		{
-			"name": "Download Video from URL",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "url",
-							"value": "https://www.youtube.com/watch?v=EXAMPLE",
-							"type": "text",
-							"description": "URL to download video from (YouTube, Instagram, Vimeo, etc.)"
-						},
-						{
-							"key": "quality",
-							"value": "best",
-							"type": "text",
-							"description": "Video quality: 'best', 'worst', '720p', '1080p', etc."
-						},
-						{
-							"key": "format_type",
-							"value": "mp4",
-							"type": "text",
-							"description": "Output format: 'mp4', 'webm', etc."
-						},
-						{
-							"key": "audio_only",
-							"value": "false",
-							"type": "text",
-							"description": "If 'true', download audio only as MP3"
-						},
-						{
-							"key": "output_filename",
-							"value": "",
-							"type": "text",
-							"description": "Optional: Custom filename (without extension)"
-						},
-						{
-							"key": "cookies_file",
-							"type": "file",
-							"src": [],
-							"description": "Optional: Cookies file (Netscape format) for authentication"
-						}
-					]
-				},
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/download-from-url",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"download-from-url"
-					]
-				},
-				"description": "Download a video from a URL using yt-dlp. Returns a job_id to poll for status."
-			},
-			"response": []
-		},
-		{
-			"name": "Download Audio from URL",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "url",
-							"value": "https://www.youtube.com/watch?v=EXAMPLE",
-							"type": "text",
-							"description": "URL to extract audio from (YouTube, Instagram, Vimeo, etc.)"
-						},
-						{
-							"key": "output_filename",
-							"value": "",
-							"type": "text",
-							"description": "Optional: Custom filename (without extension)"
-						},
-						{
-							"key": "cookies_file",
-							"type": "file",
-							"src": [],
-							"description": "Optional: Cookies file (Netscape format) for authentication"
-						}
-					]
-				},
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/download-audio-from-url",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"download-audio-from-url"
-					]
-				},
-				"description": "Download audio only from a video URL. Extracts audio as MP3. Returns a job_id to poll for status."
-			},
-			"response": []
-		},
-		{
-			"name": "Comprehensive - All Operations",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "video",
-							"type": "file",
-							"src": []
-						},
-						{
-							"key": "video_url",
-							"value": "",
-							"type": "text",
-							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
-						},
-						{
-							"key": "audio",
-							"type": "file",
-							"src": []
-						},
-						{
-							"key": "merge_audio",
-							"value": "true",
-							"type": "text"
-						},
-						{
-							"key": "color_grading",
-							"value": "true",
-							"type": "text"
-						},
-						{
-							"key": "color_preset",
-							"value": "cinematic",
-							"type": "text",
-							"description": "Options: cinematic, warm, cool, vintage, vivid, bw, natural, random"
-						},
-						{
-							"key": "color_brightness",
-							"value": "0.0",
-							"type": "text"
-						},
-						{
-							"key": "color_contrast",
-							"value": "1.0",
-							"type": "text"
-						},
-						{
-							"key": "color_saturation",
-							"value": "1.0",
-							"type": "text"
-						},
-						{
-							"key": "crop_zoom",
-							"value": "true",
-							"type": "text"
-						},
-						{
-							"key": "crop_output_size",
-							"value": "1080",
-							"type": "text"
-						},
-						{
-							"key": "reencode",
-							"value": "true",
-							"type": "text"
-						},
-						{
-							"key": "codec",
-							"value": "libx264",
-							"type": "text"
-						},
-						{
-							"key": "bitrate",
-							"value": "5000k",
-							"type": "text"
-						},
-						{
-							"key": "fps",
-							"value": "30",
-							"type": "text"
-						},
-						{
-							"key": "cookies_file",
-							"type": "file",
-							"src": [],
-							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
-						}
-					]
-				},
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/process",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"process"
-					]
-				},
-				"description": "Apply all video processing operations in one request: merge audio, color grading, crop to square, and re-encode."
-			},
-			"response": []
-		},
-		{
-			"name": "Comprehensive - Color Grade + Crop",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "video",
-							"type": "file",
-							"src": []
-						},
-						{
-							"key": "video_url",
-							"value": "",
-							"type": "text",
-							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
-						},
-						{
-							"key": "color_grading",
-							"value": "true",
-							"type": "text"
-						},
-						{
-							"key": "color_preset",
-							"value": "random",
-							"type": "text"
-						},
-						{
-							"key": "crop_zoom",
-							"value": "true",
-							"type": "text"
-						},
-						{
-							"key": "crop_output_size",
-							"value": "1080",
-							"type": "text"
-						},
-						{
-							"key": "cookies_file",
-							"type": "file",
-							"src": [],
-							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
-						}
-					]
-				},
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/process",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"process"
-					]
-				},
-				"description": "Apply color grading and crop to square in one request."
-			},
-			"response": []
-		},
-		{
-			"name": "Comprehensive - Merge Audio + Color Grade",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "video",
-							"type": "file",
-							"src": []
-						},
-						{
-							"key": "video_url",
-							"value": "",
-							"type": "text",
-							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
-						},
-						{
-							"key": "audio",
-							"type": "file",
-							"src": []
-						},
-						{
-							"key": "merge_audio",
-							"value": "true",
-							"type": "text"
-						},
-						{
-							"key": "color_grading",
-							"value": "true",
-							"type": "text"
-						},
-						{
-							"key": "color_preset",
-							"value": "warm",
-							"type": "text"
-						},
-						{
-							"key": "cookies_file",
-							"type": "file",
-							"src": [],
-							"description": "Optional: Cookies file (Netscape format) for authentication when using video_url"
-						}
-					]
-				},
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/process",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"process"
-					]
-				},
-				"description": "Merge audio with video and apply color grading."
-			},
-			"response": []
-		},
-		{
-			"name": "Get Job Status",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "{{base_url}}/api/v1/jobs/{{job_id}}",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"jobs",
-						"{{job_id}}"
-					]
-				},
-				"description": "Get the status of a specific job by job_id. Use this to poll for processing completion."
-			},
-			"response": []
-		},
-		{
-			"name": "List All Jobs",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "{{base_url}}/api/v1/jobs?status=completed&limit=100",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"jobs"
-					],
-					"query": [
-						{
-							"key": "status",
-							"value": "completed",
-							"description": "Filter by status: pending, processing, completed, failed"
-						},
-						{
-							"key": "limit",
-							"value": "100",
-							"description": "Maximum number of jobs to return (1-1000)"
-						}
-					]
-				},
-				"description": "List all jobs, optionally filtered by status."
-			},
-			"response": []
-		},
-		{
-			"name": "Download Processed Video",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/{{job_id}}/download",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"{{job_id}}",
-						"download"
-					]
-				},
-				"description": "Download the processed video file. Only works for completed jobs with video output."
-			},
-			"response": []
-		},
-		{
-			"name": "Get Scene Detection Results",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/{{job_id}}/scenes",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"{{job_id}}",
-						"scenes"
-					]
-				},
-				"description": "Get scene detection results as JSON. Only works for completed scene detection jobs."
-			},
-			"response": []
-		},
-		{
-			"name": "Download Scene Data (JSON)",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/{{job_id}}/scenes/download",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"{{job_id}}",
-						"scenes",
-						"download"
-					]
-				},
-				"description": "Download scene detection results as a JSON file."
-			},
-			"response": []
+						"description": "Download scene detection results as a JSON file."
+					},
+					"response": []
+				}
+			]
 		}
 	],
 	"variable": [
 		{
 			"key": "base_url",
 			"value": "http://localhost:8000",
-			"type": "string"
+			"type": "string",
+			"description": "Base URL for the API. Change this to your server URL."
 		},
 		{
 			"key": "job_id",
 			"value": "",
 			"type": "string",
-			"description": "Set this after getting a job_id from an upload endpoint response"
+			"description": "Set this after getting a job_id from an upload endpoint response. Used in status checks and downloads."
 		}
 	]
 }
-
-

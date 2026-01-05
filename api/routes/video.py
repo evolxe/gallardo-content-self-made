@@ -29,81 +29,11 @@ def get_job_manager(request: Request) -> JobManager:
     return request.app.state.job_manager
 
 
-async def extract_cookies_file(form: dict, upload_dir: Path) -> Optional[str]:
-    """
-    Extract cookies file from form data (as file upload or from form field).
-    
-    Args:
-        form: Form data dictionary
-        upload_dir: Directory to save uploaded cookies file
-        
-    Returns:
-        Path to saved cookies file, or None if no cookies provided
-        
-    Raises:
-        HTTPException: If cookies file is invalid or can't be saved
-    """
-    cookies_file = None
-    cookies_file_upload = None
-    
-    # First, check for cookies file upload (look for any file with 'cookie' in the field name)
-    for key, value in form.items():
-        key_lower = key.lower()
-        if 'cookie' in key_lower:
-            is_upload_file = (
-                isinstance(value, UploadFile) or 
-                type(value).__name__ == "UploadFile" or
-                (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
-            )
-            if is_upload_file:
-                cookies_file_upload = value
-                break
-    
-    if cookies_file_upload:
-        # Save uploaded cookies file
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        cookies_filename = cookies_file_upload.filename or "cookies.txt"
-        cookies_path = upload_dir / f"cookies_{timestamp}_{cookies_filename}"
-        
-        try:
-            content = await cookies_file_upload.read()
-            
-            # Validate it's a text file (check for Netscape cookie format header)
-            content_str = content.decode('utf-8', errors='ignore')
-            if not (content_str.strip().startswith('# HTTP Cookie File') or 
-                    content_str.strip().startswith('# Netscape HTTP Cookie File')):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "Invalid cookies file format",
-                        "help": "Cookies file must be in Netscape format. First line should be '# HTTP Cookie File' or '# Netscape HTTP Cookie File'"
-                    }
-                )
-            
-            with open(cookies_path, "wb") as f:
-                f.write(content)
-            
-            cookies_file = str(cookies_path)
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"Failed to save cookies file: {str(e)}",
-                    "help": "Make sure the cookies file is valid and in Netscape format"
-                }
-            )
-    
-    return cookies_file
-
-
 async def get_video_input(
     form: dict,
     video_url: Optional[str] = None,
     upload_dir: Optional[Path] = None,
     prefix: str = "video",
-    cookies_file: Optional[str] = None,
 ) -> Tuple[Path, str]:
     """
     Helper function to get video input from either URL or file upload.
@@ -173,7 +103,7 @@ async def get_video_input(
                 "best",  # quality
                 "mp4",  # format_type
                 False,  # audio_only
-                cookies_file,  # cookies_file
+                None,  # cookies_file
             )
             
             downloaded_path = Path(result["output_path"])
@@ -242,7 +172,6 @@ async def remove_audio_from_video(
     background_tasks: BackgroundTasks,
     request: Request,
     video_url: Optional[str] = Form(None),
-    cookies_file: Optional[UploadFile] = File(None),
 ):
     """
     Upload a video (or provide URL) and remove its audio track.
@@ -274,24 +203,12 @@ async def remove_audio_from_video(
             }
         )
     
-    # Extract cookies file if provided
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    cookies_path = None
-    try:
-        cookies_path = await extract_cookies_file(form, upload_dir)
-    except HTTPException:
-        raise
-    except Exception:
-        pass
-    
     try:
         # Get video input (from URL or file upload)
         input_path, input_filename = await get_video_input(
             form=form,
             video_url=video_url,
             prefix="input",
-            cookies_file=cookies_path,
         )
         
         # Create output path - organized by use case
@@ -418,7 +335,6 @@ async def detect_scenes_in_video(
     background_tasks: BackgroundTasks,
     request: Request,
     video_url: Optional[str] = Form(None),
-    cookies_file: Optional[UploadFile] = File(None),
 ):
     """
     Upload a video (or provide URL) and detect scene cuts.
@@ -449,24 +365,12 @@ async def detect_scenes_in_video(
             }
         )
     
-    # Extract cookies file if provided
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    cookies_path = None
-    try:
-        cookies_path = await extract_cookies_file(form, upload_dir)
-    except HTTPException:
-        raise
-    except Exception:
-        pass
-    
     try:
         # Get video input (from URL or file upload)
         input_path, input_filename = await get_video_input(
             form=form,
             video_url=video_url,
             prefix="scene_detection",
-            cookies_file=cookies_path,
         )
         
         # Create output path for scene data (JSON file)
@@ -753,7 +657,6 @@ async def download_audio_from_url(
     Parameters (form-data):
     - url: URL of the video to extract audio from (required)
     - output_filename: Optional custom filename (without extension)
-    - cookies_file: Optional cookies file upload (Netscape format) for authentication
     
     Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
     When completed, download the audio via GET /api/v1/videos/{job_id}/download
@@ -769,18 +672,6 @@ async def download_audio_from_url(
     # Validate URL
     if not url or not url.strip():
         raise HTTPException(status_code=400, detail="URL parameter is required")
-    
-    # Extract cookies file if provided
-    cookies_file = None
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        cookies_file = await extract_cookies_file(form, upload_dir)
-    except HTTPException:
-        raise
-    except Exception as e:
-        # If cookies extraction fails, continue without cookies
-        pass
     
     # Create job
     job_id = job_manager.create_job(
@@ -814,7 +705,7 @@ async def download_audio_from_url(
         format_type="mp3",
         audio_only=True,  # This is the key parameter
         output_filename=output_filename,
-        cookies_file=cookies_file,
+        cookies_file=None,
         job_manager=job_manager,
     )
     
@@ -849,34 +740,15 @@ async def download_video_from_url(
     - format_type: Output format ('mp4', 'webm', etc.) - default: 'mp4'
     - audio_only: If True, download audio only (as mp3) - default: False
     - output_filename: Optional custom filename (without extension)
-    - cookies_file: Optional cookies file upload (Netscape format) for authentication
     
     Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
     When completed, download the video via GET /api/v1/videos/{job_id}/download
     """
     job_manager: JobManager = get_job_manager(request)
     
-    # Parse form data to extract cookies file if provided
-    try:
-        form = await request.form()
-    except Exception:
-        form = {}
-    
     # Validate URL
     if not url or not url.strip():
         raise HTTPException(status_code=400, detail="URL parameter is required")
-    
-    # Extract cookies file if provided
-    cookies_file = None
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        cookies_file = await extract_cookies_file(form, upload_dir)
-    except HTTPException:
-        raise
-    except Exception as e:
-        # If cookies extraction fails, continue without cookies
-        pass
     
     # Create job
     job_id = job_manager.create_job(
@@ -912,7 +784,7 @@ async def download_video_from_url(
         format_type=format_type,
         audio_only=audio_only,
         output_filename=output_filename,
-        cookies_file=cookies_file,
+        cookies_file=None,
         job_manager=job_manager,
     )
     
@@ -976,7 +848,7 @@ async def process_ytdlp_download(
             quality,
             format_type,
             audio_only,
-            cookies_file,
+            None,
         )
         
         job_manager.update_job(
@@ -1018,7 +890,6 @@ async def color_grade_video(
     contrast: Optional[float] = Form(None),
     saturation: Optional[float] = Form(None),
     video_url: Optional[str] = Form(None),
-    cookies_file: Optional[UploadFile] = File(None),
 ):
     """
     Upload a video (or provide URL) and apply color grading.
@@ -1103,24 +974,12 @@ async def color_grade_video(
             }
         )
     
-    # Extract cookies file if provided
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    cookies_path = None
-    try:
-        cookies_path = await extract_cookies_file(form, upload_dir)
-    except HTTPException:
-        raise
-    except Exception:
-        pass
-    
     try:
         # Get video input (from URL or file upload)
         input_path, input_filename = await get_video_input(
             form=form,
             video_url=video_url,
             prefix="color_grade",
-            cookies_file=cookies_path,
         )
         
         # Create output path
@@ -1276,7 +1135,6 @@ async def crop_and_zoom_video(
     aspect_ratio: Optional[str] = Form(None),
     background_color: Optional[str] = Form(None),
     video_url: Optional[str] = Form(None),
-    cookies_file: Optional[UploadFile] = File(None),
 ):
     """
     Upload a video (or provide URL) and crop it to any aspect ratio, outputting as 9:16.
@@ -1356,24 +1214,12 @@ async def crop_and_zoom_video(
             }
         )
     
-    # Extract cookies file if provided
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    cookies_path = None
-    try:
-        cookies_path = await extract_cookies_file(form, upload_dir)
-    except HTTPException:
-        raise
-    except Exception:
-        pass
-    
     try:
         # Get video input (from URL or file upload)
         input_path, input_filename = await get_video_input(
             form=form,
             video_url=video_url,
             prefix="crop_zoom",
-            cookies_file=cookies_path,
         )
         
         # Create output path
@@ -1518,7 +1364,6 @@ async def reencode_video(
     bitrate: Optional[str] = Form(None),
     fps: Optional[float] = Form(None),
     video_url: Optional[str] = Form(None),
-    cookies_file: Optional[UploadFile] = File(None),
 ):
     """
     Upload a video (or provide URL) and re-encode it with specified settings.
@@ -1555,17 +1400,6 @@ async def reencode_video(
             }
         )
     
-    # Extract cookies file if provided
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    cookies_path = None
-    try:
-        cookies_path = await extract_cookies_file(form, upload_dir)
-    except HTTPException:
-        raise
-    except Exception:
-        pass
-    
     input_path = None  # Initialize to avoid UnboundLocalError
     try:
         # Get video input (from URL or file upload)
@@ -1573,7 +1407,6 @@ async def reencode_video(
             form=form,
             video_url=video_url,
             prefix="reencode",
-            cookies_file=cookies_path,
         )
         
         # Create output path
@@ -1775,18 +1608,6 @@ async def merge_audio_and_video(
     else:
         audio_url = None
     
-    # Extract cookies file if provided (universal for all downloads)
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    cookies_file = None
-    
-    try:
-        cookies_file = await extract_cookies_file(form, upload_dir)
-    except HTTPException:
-        raise
-    except Exception:
-        pass
-    
     # Generate timestamp once for use throughout the function
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     
@@ -1802,7 +1623,6 @@ async def merge_audio_and_video(
                 form={},  # Empty form since we're using URL
                 video_url=video_url,
                 prefix="merge_video",
-                cookies_file=cookies_file,
             )
                 
         except Exception as e:
@@ -1916,7 +1736,7 @@ async def merge_audio_and_video(
                 "best",  # quality
                 "mp3",   # format_type
                 True,    # audio_only
-                cookies_file,  # cookies_file (universal for all downloads)
+                None,  # cookies_file
             )
             
             audio_path = Path(result["output_path"])
@@ -1926,12 +1746,6 @@ async def merge_audio_and_video(
             audio_filename = audio_path.name
             
         except Exception as e:
-            # Clean up cookies file on error
-            if cookies_file and Path(cookies_file).exists():
-                try:
-                    Path(cookies_file).unlink()
-                except Exception:
-                    pass
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -2053,14 +1867,6 @@ async def merge_audio_and_video(
             job_manager=job_manager,
         )
         
-        # Clean up cookies file after downloads complete (no longer needed)
-        # Downloads happen synchronously, so cookies are safe to delete now
-        if cookies_file and Path(cookies_file).exists():
-            try:
-                Path(cookies_file).unlink()
-            except Exception:
-                pass
-        
         # Return job_id immediately
         return {
             "job_id": job_id,
@@ -2079,12 +1885,6 @@ async def merge_audio_and_video(
             Path(video_path).unlink()
         if audio_path and Path(audio_path).exists():
             Path(audio_path).unlink()
-        # Clean up cookies file
-        if cookies_file and Path(cookies_file).exists():
-            try:
-                Path(cookies_file).unlink()
-            except Exception:
-                pass
         raise HTTPException(status_code=500, detail=f"Error processing files: {str(e)}")
 
 
@@ -2183,7 +1983,6 @@ async def process_video_comprehensive(
     bitrate: Optional[str] = Form(None),
     fps: Optional[float] = Form(None),
     video_url: Optional[str] = Form(None),
-    cookies_file: Optional[UploadFile] = File(None),
 ):
     """
     Comprehensive video processing endpoint - apply multiple transformations in one request.
@@ -2250,17 +2049,6 @@ async def process_video_comprehensive(
             }
         )
     
-    # Extract cookies file if provided
-    upload_dir = project_root / "temp_videos" / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    cookies_path = None
-    try:
-        cookies_path = await extract_cookies_file(form, upload_dir)
-    except HTTPException:
-        raise
-    except Exception:
-        pass
-    
     # Initialize variables for cleanup in exception handler
     input_video_path = None
     input_audio_path = None
@@ -2312,7 +2100,6 @@ async def process_video_comprehensive(
             form=form,
             video_url=video_url,
             prefix="process",
-            cookies_file=cookies_path,
         )
         
         # Find audio file if merge_audio is requested
