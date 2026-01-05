@@ -268,78 +268,89 @@ class YTDLPService:
     
     def _get_env_with_ffmpeg(self):
         """
-        Get environment variables with ffmpeg and deno in PATH.
-        This ensures subprocess calls can find ffmpeg and deno even if the Python
+        Get environment variables with ffmpeg in PATH.
+        This ensures subprocess calls can find ffmpeg even if the Python
         process was started before PATH was updated.
         
+        Dynamically discovers FFmpeg location to work across different environments
+        (Docker, Render.com, local development, etc.)
+        
+        Note: Node.js/Deno are handled internally by the yt_dlp Python library,
+        so we don't need to add them to PATH for subprocess calls.
+        
         Returns:
-            Dictionary of environment variables with ffmpeg and deno in PATH
+            Dictionary of environment variables with ffmpeg in PATH
         """
         env = os.environ.copy()
         current_path = env.get('PATH', '')
         separator = ';' if os.name == 'nt' else ':'
         
-        # Try to find ffmpeg using shutil.which (checks current PATH)
+        # Method 1: Try to find FFmpeg using which (checks current PATH)
         ffmpeg_bin = shutil.which("ffmpeg")
         if ffmpeg_bin:
             ffmpeg_dir = os.path.dirname(ffmpeg_bin)
-            if ffmpeg_dir not in current_path:
-                env['PATH'] = current_path + separator + ffmpeg_dir
-                current_path = env['PATH']
-        
-        # Also ensure deno is in PATH (required for YouTube audio extraction)
-        deno_bin = shutil.which("deno")
-        if deno_bin:
-            deno_dir = os.path.dirname(deno_bin)
-            if deno_dir not in current_path:
-                env['PATH'] = current_path + separator + deno_dir
-                current_path = env['PATH']
+            if ffmpeg_dir and ffmpeg_dir not in current_path:
+                current_path = ffmpeg_dir + separator + current_path if current_path else ffmpeg_dir
         else:
-            # If not found, check common locations (especially for Docker/Render.com)
-            # In Dockerfile, we install deno to /usr/local/bin
-            common_deno_paths = [
-                "/usr/local/bin",  # Docker default location
-                "/root/.deno/bin",  # Deno default install location
-                r"C:\deno",  # Windows common location
-            ]
-            for deno_path in common_deno_paths:
-                if os.path.exists(deno_path):
-                    deno_exe = os.path.join(deno_path, "deno.exe" if os.name == 'nt' else "deno")
-                    if os.path.exists(deno_exe) and deno_path not in current_path:
-                        env['PATH'] = current_path + separator + deno_path
-                        current_path = env['PATH']
-                        break
-        
-        # If ffmpeg not found in PATH, check common locations
-        if not ffmpeg_bin:
-            ffmpeg_paths = [
-                r"C:\Users\ACER\developer\ffmpeg-2025-12-28-git-9ab2a437a1-essentials_build\bin",
-                r"C:\ffmpeg\bin",
-                r"C:\Program Files\ffmpeg\bin",
-                r"C:\Program Files (x86)\ffmpeg\bin",
+            # Method 2: Try to find FFmpeg by checking common installation locations
+            # Use subprocess to query package manager (works in Docker/Render.com)
+            common_ffmpeg_paths = [
+                "/usr/bin",           # Most common Linux location
+                "/usr/local/bin",     # Alternative location
+                "/bin",               # Core system binaries
             ]
             
-            # Also check system and user environment variables (may have been updated)
-            # On Windows, check user environment variable directly
-            if os.name == 'nt':
+            # Try to use dpkg to find actual FFmpeg location (Debian/Ubuntu)
+            if os.path.exists("/usr/bin/dpkg"):
                 try:
-                    import winreg
-                    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment")
-                    user_path = winreg.QueryValueEx(key, "Path")[0]
-                    winreg.CloseKey(key)
-                    if user_path and user_path not in current_path:
-                        env['PATH'] = current_path + separator + user_path
-                        current_path = env['PATH']
-                except (FileNotFoundError, OSError, ImportError):
-                    pass
+                    result = subprocess.run(
+                        ["dpkg", "-L", "ffmpeg"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if result.returncode == 0:
+                        for line in result.stdout.split('\n'):
+                            if '/bin/ffmpeg' in line:
+                                discovered_path = os.path.dirname(line.strip())
+                                if discovered_path and discovered_path not in current_path:
+                                    common_ffmpeg_paths.insert(0, discovered_path)
+                                break
+                except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.CalledProcessError):
+                    pass  # Fall back to common paths
             
-            # Check known locations and add if they exist
-            for ffmpeg_path in ffmpeg_paths:
-                if os.path.exists(ffmpeg_path):
-                    exe_path = os.path.join(ffmpeg_path, "ffmpeg.exe" if os.name == 'nt' else "ffmpeg")
-                    if os.path.exists(exe_path) and ffmpeg_path not in current_path:
-                        env['PATH'] = current_path + separator + ffmpeg_path
-                        break
+            # Check each path and add the first one that contains ffmpeg
+            for ffmpeg_path in common_ffmpeg_paths:
+                ffmpeg_exe = os.path.join(ffmpeg_path, "ffmpeg")
+                if os.path.exists(ffmpeg_exe):
+                    if ffmpeg_path not in current_path:
+                        current_path = ffmpeg_path + separator + current_path if current_path else ffmpeg_path
+                    break
+        
+        env['PATH'] = current_path
+        
+        # Final verification: ensure FFmpeg is now accessible
+        ffmpeg_bin = shutil.which("ffmpeg", path=env['PATH'])
+        if not ffmpeg_bin:
+            # Last resort: try direct file system check
+            for check_path in ["/usr/bin", "/usr/local/bin", "/bin"]:
+                test_ffmpeg = os.path.join(check_path, "ffmpeg")
+                if os.path.exists(test_ffmpeg) and os.access(test_ffmpeg, os.X_OK):
+                    if check_path not in env['PATH']:
+                        env['PATH'] = check_path + separator + env['PATH']
+                    ffmpeg_bin = test_ffmpeg
+                    break
+            
+            if not ffmpeg_bin:
+                # Critical error - FFmpeg must be available
+                raise RuntimeError(
+                    f"FFmpeg not found. Searched in PATH: {env.get('PATH', 'N/A')}. "
+                    f"Please ensure FFmpeg is installed via 'apt-get install ffmpeg' in Dockerfile."
+                )
+        
+        # Note: Node.js and Deno are installed for yt-dlp Python library's JS runtime,
+        # but the Python library handles finding them internally. We don't need to
+        # add them to PATH for subprocess calls - only FFmpeg is needed.
         
         return env
     
@@ -452,12 +463,37 @@ class YTDLPService:
                     capture_output=True,
                     text=True,
                     check=True,
-                    env=env
+                    env=env,
+                    timeout=60  # Add timeout to prevent hanging
                 )
+                
+                # Safety check: ensure result is not None and has stdout
+                if info_result is None:
+                    raise Exception("Subprocess call returned None. This should not happen.")
+                if not hasattr(info_result, 'stdout') or info_result.stdout is None:
+                    raise Exception(
+                        f"Subprocess result has no stdout. "
+                        f"Return code: {info_result.returncode if hasattr(info_result, 'returncode') else 'unknown'}, "
+                        f"stderr: {info_result.stderr if hasattr(info_result, 'stderr') else 'unknown'}"
+                    )
+                
                 info = json.loads(info_result.stdout)
+            except FileNotFoundError as e:
+                raise Exception(
+                    f"Command not found. yt-dlp or FFmpeg may not be installed or not in PATH. "
+                    f"Original error: {str(e)}"
+                )
+            except subprocess.TimeoutExpired as e:
+                raise Exception(f"Command timed out after 60 seconds: {str(e)}")
             except subprocess.CalledProcessError as e:
-                # Get error from stderr or stdout
-                error_output = e.stderr if e.stderr else (e.stdout if e.stdout else str(e))
+                # Get error from stderr or stdout, with safety checks
+                error_output = ""
+                if hasattr(e, 'stderr') and e.stderr:
+                    error_output = e.stderr
+                elif hasattr(e, 'stdout') and e.stdout:
+                    error_output = e.stdout
+                else:
+                    error_output = str(e)
                 error_msg = f"Failed to get video info: {error_output}"
                 
                 # Check for common issues
@@ -470,7 +506,31 @@ class YTDLPService:
                 raise Exception(error_msg)
             
             # Download the video using subprocess (following Python backend pattern)
-            download_result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=env)
+            try:
+                download_result = subprocess.run(
+                    cmd, 
+                    capture_output=True, 
+                    text=True, 
+                    check=True, 
+                    env=env,
+                    timeout=600  # 10 minute timeout for downloads
+                )
+            except FileNotFoundError as e:
+                raise Exception(
+                    f"Command not found. yt-dlp or FFmpeg may not be installed or not in PATH. "
+                    f"Original error: {str(e)}"
+                )
+            except subprocess.TimeoutExpired as e:
+                raise Exception(f"Download timed out after 10 minutes: {str(e)}")
+            except subprocess.CalledProcessError as e:
+                error_output = ""
+                if hasattr(e, 'stderr') and e.stderr:
+                    error_output = e.stderr
+                elif hasattr(e, 'stdout') and e.stdout:
+                    error_output = e.stdout
+                else:
+                    error_output = str(e)
+                raise Exception(f"Download failed: {error_output}")
             
             # Find the newly created file
             files_after = set(self.output_dir.glob("*"))
@@ -565,13 +625,32 @@ class YTDLPService:
             # Get environment with ffmpeg in PATH
             env = self._get_env_with_ffmpeg()
             
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                env=env
-            )
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    env=env,
+                    timeout=60  # Add timeout to prevent hanging
+                )
+            except FileNotFoundError as e:
+                raise Exception(
+                    f"Command not found. This usually means yt-dlp or FFmpeg is not installed. "
+                    f"Please ensure both are available in PATH. Original error: {str(e)}"
+                )
+            except subprocess.TimeoutExpired as e:
+                raise Exception(f"Command timed out after 60 seconds: {str(e)}")
+            
+            # Safety check: ensure result is not None and has stdout
+            if result is None:
+                raise Exception("Subprocess call returned None. This should not happen.")
+            if not hasattr(result, 'stdout') or result.stdout is None:
+                raise Exception(
+                    f"Subprocess result has no stdout. "
+                    f"Return code: {result.returncode if hasattr(result, 'returncode') else 'unknown'}, "
+                    f"stderr: {result.stderr if hasattr(result, 'stderr') else 'unknown'}"
+                )
             
             info = json.loads(result.stdout)
             
@@ -592,9 +671,21 @@ class YTDLPService:
                 "url": url,
             }
         except subprocess.CalledProcessError as e:
-            raise Exception(f"Error getting video info: {e.stderr if hasattr(e, 'stderr') else str(e)}")
+            error_msg = "Error getting video info"
+            if hasattr(e, 'stderr') and e.stderr:
+                error_msg += f": {e.stderr}"
+            elif hasattr(e, 'stdout') and e.stdout:
+                error_msg += f": {e.stdout}"
+            else:
+                error_msg += f": {str(e)}"
+            raise Exception(error_msg)
+        except FileNotFoundError as e:
+            raise Exception(
+                f"Command not found. yt-dlp or FFmpeg may not be installed or not in PATH. "
+                f"Original error: {str(e)}"
+            )
         except json.JSONDecodeError as e:
-            raise Exception(f"Error parsing video info: {str(e)}")
+            raise Exception(f"Error parsing video info JSON: {str(e)}")
         except Exception as e:
             raise Exception(f"Error getting video info: {str(e)}")
 
