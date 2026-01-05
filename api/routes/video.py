@@ -1787,6 +1787,9 @@ async def merge_audio_and_video(
     except Exception:
         pass
     
+    # Generate timestamp once for use throughout the function
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    
     # Handle video input (from URL or file upload)
     video_path = None
     video_filename = None
@@ -1897,7 +1900,6 @@ async def merge_audio_and_video(
             audio_download_dir = project_root / "temp_videos" / "uploads"
             audio_download_dir.mkdir(parents=True, exist_ok=True)
             
-            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             audio_output_filename = f"merge_audio_download_{timestamp}"
             audio_output_path = audio_download_dir / f"{audio_output_filename}.mp3"
             
@@ -1993,7 +1995,6 @@ async def merge_audio_and_video(
         upload_dir = project_root / "temp_videos" / "uploads"
         upload_dir.mkdir(parents=True, exist_ok=True)
         
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         audio_filename = audio_file.filename or "audio"
         # Ensure filename has an extension - try to detect from content-type
         if not Path(audio_filename).suffix:
