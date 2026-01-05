@@ -35,32 +35,8 @@ async def lifespan(app: FastAPI):
     print("Service starting...")
     print("=" * 80)
     
-    # Verify FFmpeg is available at startup
-    import shutil
-    import subprocess
-    ffmpeg_path = shutil.which("ffmpeg")
-    if ffmpeg_path:
-        print(f"✓ FFmpeg found: {ffmpeg_path}")
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-version"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode == 0:
-                version_line = result.stdout.split('\n')[0]
-                print(f"✓ FFmpeg version: {version_line}")
-            else:
-                print(f"⚠ FFmpeg found but version check failed")
-        except Exception as e:
-            print(f"⚠ FFmpeg verification error: {e}")
-    else:
-        print("✗ ERROR: FFmpeg not found in PATH!")
-        print(f"   Current PATH: {os.environ.get('PATH', 'N/A')}")
-        print("   This will cause video processing to fail.")
-    
     # Verify Node.js is available (for yt-dlp)
+    import shutil
     node_path = shutil.which("node")
     if node_path:
         print(f"✓ Node.js found: {node_path}")

@@ -13,3 +13,6 @@ pydantic
 scenedetect
 opencv-python
 yt-dlp[default]
+pytest
+pytest-asyncio
+httpx

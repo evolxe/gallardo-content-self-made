@@ -5,10 +5,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install system dependencies required for video processing
-# FFmpeg is required by MoviePy for video encoding/decoding
-# This installs FFmpeg system-wide via apt-get (standard Linux package manager)
 RUN apt-get update && apt-get install -y nodejs npm \
-    ffmpeg \
     libsm6 \
     libxext6 \
     libxrender-dev \
@@ -17,21 +14,8 @@ RUN apt-get update && apt-get install -y nodejs npm \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Find and verify FFmpeg installation location
-# Use dpkg to find where FFmpeg binaries are actually installed
-RUN FFMPEG_PATH=$(dpkg -L ffmpeg | grep -E '/bin/ffmpeg$' | head -n 1 | xargs dirname) && \
-    FFMPEG_DIR=${FFMPEG_PATH:-/usr/bin} && \
-    echo "FFmpeg binary directory: $FFMPEG_DIR" && \
-    ls -la $FFMPEG_DIR/ffmpeg && \
-    $FFMPEG_DIR/ffmpeg -version | head -n 1 && \
-    echo "FFMPEG_BIN_DIR=$FFMPEG_DIR" >> /etc/environment
-
 # Set PATH with standard binary directories
-# FFmpeg must be accessible for MoviePy subprocess calls
 ENV PATH="/usr/bin:/usr/local/bin:/bin:${PATH}"
-RUN echo "Final PATH: $PATH" && \
-    which ffmpeg && \
-    ffmpeg -version | head -n 1
 
 # Install deno (JavaScript runtime) for yt-dlp YouTube extraction
 # YouTube now requires a JS runtime for proper extraction
@@ -73,7 +57,6 @@ EXPOSE 8000
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
-# Ensure FFmpeg is in PATH (required for MoviePy subprocess calls)
 ENV PATH="/usr/bin:/usr/local/bin:/bin:${PATH}"
 
 # Health check (using curl instead of requests to avoid extra dependency)

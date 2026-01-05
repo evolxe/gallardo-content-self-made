@@ -20,100 +20,61 @@ sys.path.insert(0, str(project_root))
 
 def convert_local_video_to_mp3(input_file: str) -> str:
     """
-    Extract audio from video file using FFmpeg via subprocess.
-    
-    Follows the exact pattern from Python backend documentation:
-    - Uses subprocess.run() to call FFmpeg directly
-    - No Python wrapper packages
-    - FFmpeg must be in system PATH
+    Extract audio from video file using MoviePy.
     
     Args:
-        input_file: Path to input video file (MP4)
+        input_file: Path to input video file (any format supported by MoviePy)
         
     Returns:
         Path to output MP3 file
         
     Raises:
-        Exception: If FFmpeg is not found or conversion fails
+        Exception: If conversion fails
     """
-    output_file = input_file.replace('.mp4', '.mp3')
+    from moviepy import VideoFileClip
     
-    # Check if FFmpeg is available
-    ffmpeg_bin = shutil.which("ffmpeg")
-    if not ffmpeg_bin:
-        raise Exception("FFmpeg not found. Please install FFmpeg system-wide (apt-get, brew, or download from https://ffmpeg.org)")
+    output_file = input_file.rsplit('.', 1)[0] + '.mp3'
     
-    # Get environment with ffmpeg in PATH
-    env = os.environ.copy()
-    ffmpeg_dir = os.path.dirname(ffmpeg_bin)
-    current_path = env.get('PATH', '')
-    if ffmpeg_dir not in current_path:
-        separator = ';' if os.name == 'nt' else ':'
-        env['PATH'] = current_path + separator + ffmpeg_dir
-    
-    # Use subprocess.run() exactly as shown in Python backend documentation
-    subprocess.run([
-        "ffmpeg", "-y", 
-        "-i", input_file, 
-        "-vn",           # No video
-        "-ar", "44100",  # Sample rate
-        "-ac", "2",      # Stereo
-        "-b:a", "192k",  # Audio bitrate
-        output_file
-    ], check=True, env=env)
+    video = VideoFileClip(input_file)
+    try:
+        if video.audio is None:
+            raise Exception("Video file has no audio track")
+        
+        audio = video.audio
+        audio.write_audiofile(
+            output_file,
+            codec='mp3',
+            bitrate='192k',
+            logger=None  # Suppress verbose logging
+        )
+        audio.close()
+    finally:
+        video.close()
     
     return output_file
 
 
 def local_video_to_mp3(local_mp4_path: str) -> str:
     """
-    Alternative method to extract MP3 from video using FFmpeg via subprocess.
+    Extract MP3 from video using MoviePy.
     
-    Follows the exact pattern from Python backend documentation.
+    This is an alias for convert_local_video_to_mp3() for backward compatibility.
     
     Args:
-        local_mp4_path: Path to input MP4 video file
+        local_mp4_path: Path to input video file (any format supported by MoviePy)
         
     Returns:
         Path to output MP3 file
         
     Raises:
-        Exception: If FFmpeg is not found or conversion fails
+        Exception: If conversion fails
     """
-    improved_mp3_path = local_mp4_path.replace('.mp4', '.mp3')
-    
-    # Check if FFmpeg is available
-    ffmpeg_bin = shutil.which("ffmpeg")
-    if not ffmpeg_bin:
-        raise Exception("FFmpeg not found. Please install FFmpeg system-wide (apt-get, brew, or download from https://ffmpeg.org)")
-    
-    # Get environment with ffmpeg in PATH
-    env = os.environ.copy()
-    ffmpeg_dir = os.path.dirname(ffmpeg_bin)
-    current_path = env.get('PATH', '')
-    if ffmpeg_dir not in current_path:
-        separator = ';' if os.name == 'nt' else ':'
-        env['PATH'] = current_path + separator + ffmpeg_dir
-    
-    # Use subprocess.call() exactly as shown in Python backend documentation
-    command = [
-        "ffmpeg", "-y", 
-        "-i", local_mp4_path, 
-        "-vn",                    # No video
-        "-acodec", "libmp3lame",  # MP3 codec
-        "-f", "mp3",              # Output format
-        improved_mp3_path
-    ]
-    subprocess.call(command, env=env)
-    
-    return improved_mp3_path
+    return convert_local_video_to_mp3(local_mp4_path)
 
 
 def optimize_video_for_reels(input_file: str, output_file: Optional[str] = None) -> str:
     """
-    Optimize video for Instagram Reels/YouTube Shorts using FFmpeg via subprocess.
-    
-    Follows the exact pattern from Python backend documentation.
+    Optimize video for Instagram Reels/YouTube Shorts using MoviePy.
     
     Args:
         input_file: Path to input video file
@@ -123,54 +84,46 @@ def optimize_video_for_reels(input_file: str, output_file: Optional[str] = None)
         Path to optimized output file
         
     Raises:
-        Exception: If FFmpeg is not found or optimization fails
+        Exception: If optimization fails
     """
+    from moviepy import VideoFileClip, vfx
+    
     if output_file is None:
         output_file = os.path.join(
             os.path.dirname(input_file),
             'reeloptimized-' + os.path.basename(input_file)
         )
     
-    # Check if FFmpeg is available
-    ffmpeg_bin = shutil.which("ffmpeg")
-    if not ffmpeg_bin:
-        raise Exception("FFmpeg not found. Please install FFmpeg system-wide (apt-get, brew, or download from https://ffmpeg.org)")
+    video = VideoFileClip(input_file)
+    try:
+        # Resize to height 1080 (maintain aspect ratio)
+        video = video.with_effects([vfx.Resize(height=1080)])
+        
+        # Set FPS to 60
+        video = video.with_fps(60)
+        
+        # Write optimized video
+        video.write_videofile(
+            output_file,
+            codec="libx264",
+            audio_codec="aac",
+            bitrate="5000k",
+            preset="medium",
+            ffmpeg_params=[
+                "-brand", "mp42",
+                "-pix_fmt", "yuv420p",
+                "-profile:v", "main",
+                "-level", "3.1",
+                "-tune", "fastdecode",
+                "-movflags", "+faststart",
+                "-maxrate", "25M",
+                "-bufsize", "30M",
+            ],
+            logger=None  # Suppress verbose logging
+        )
+    finally:
+        video.close()
     
-    # Get environment with ffmpeg in PATH
-    env = os.environ.copy()
-    ffmpeg_dir = os.path.dirname(ffmpeg_bin)
-    current_path = env.get('PATH', '')
-    if ffmpeg_dir not in current_path:
-        separator = ';' if os.name == 'nt' else ':'
-        env['PATH'] = current_path + separator + ffmpeg_dir
-    
-    scale_filter = "scale=-2:1080"
-    
-    # Use subprocess.call() exactly as shown in Python backend documentation
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", input_file,
-        "-c:v", "libx264",
-        "-brand", "mp42",
-        "-pix_fmt", "yuv420p",
-        "-profile:v", "main",
-        "-level", "3.1",
-        "-preset", "medium",
-        "-tune", "fastdecode",
-        "-movflags", "+faststart",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-ac", "2",
-        "-ar", "48000",
-        "-maxrate", "25M",
-        "-bufsize", "30M",
-        "-vf", scale_filter,
-        "-r", "60",
-        "-f", "mp4",
-        "-y", output_file
-    ]
-    
-    subprocess.call(cmd, env=env)
     return output_file
 
 
@@ -269,14 +222,15 @@ class YTDLPService:
     def _get_env_with_ffmpeg(self):
         """
         Get environment variables with ffmpeg in PATH.
-        This ensures subprocess calls can find ffmpeg even if the Python
-        process was started before PATH was updated.
+        
+        This ensures yt-dlp subprocess calls can find FFmpeg (yt-dlp uses FFmpeg
+        internally for merging video+audio streams and audio extraction).
         
         Dynamically discovers FFmpeg location to work across different environments
         (Docker, Render.com, local development, etc.)
         
-        Note: Node.js/Deno are handled internally by the yt_dlp Python library,
-        so we don't need to add them to PATH for subprocess calls.
+        Note: We no longer call FFmpeg directly via subprocess - all video/audio
+        processing uses MoviePy. This function is only needed for yt-dlp subprocess calls.
         
         Returns:
             Dictionary of environment variables with ffmpeg in PATH
