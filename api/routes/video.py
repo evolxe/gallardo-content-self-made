@@ -5,6 +5,7 @@ Video processing endpoints - simple audio removal service.
 import os
 import sys
 import asyncio
+import mimetypes
 from pathlib import Path
 from typing import Optional, Tuple
 from datetime import datetime
@@ -128,6 +129,11 @@ async def get_video_input(
     # Check if both URL and file are provided
     video_file = None
     for key, value in form.items():
+        # Skip cookie files - they're not video files
+        key_lower = key.lower()
+        if 'cookie' in key_lower:
+            continue
+        
         is_upload_file = (
             isinstance(value, UploadFile) or 
             type(value).__name__ == "UploadFile" or
@@ -198,6 +204,17 @@ async def get_video_input(
     elif video_file:
         # Handle file upload
         input_filename = video_file.filename or "video"
+        # Ensure filename has an extension - try to detect from content-type
+        if not Path(input_filename).suffix:
+            # Try to get extension from content-type header
+            content_type = getattr(video_file, 'content_type', None)
+            if content_type:
+                ext = mimetypes.guess_extension(content_type.split(';')[0].strip())
+                if ext:
+                    input_filename = f"{input_filename}{ext}"
+            # If no extension can be determined, leave it as-is
+            # FFmpeg/MoviePy can auto-detect format from file headers
+        
         input_path = upload_dir / f"{prefix}_{timestamp}_{input_filename}"
         
         # Save uploaded video
@@ -1560,6 +1577,7 @@ async def reencode_video(
         )
         
         # Create output path
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         output_dir = project_root / "temp_videos" / "output" / "reencode"
         output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -1738,17 +1756,22 @@ async def merge_audio_and_video(
     form_audio_url = form.get("audio_url")
     
     # Prioritize form dict values, fallback to parameter
-    if form_video_url:
-        video_url = str(form_video_url).strip() if str(form_video_url).strip() else None
+    # Only use URL if it's a non-empty string (not empty string, None, or UploadFile)
+    if form_video_url and not isinstance(form_video_url, UploadFile):
+        video_url_str = str(form_video_url).strip()
+        video_url = video_url_str if video_url_str else None
     elif video_url and isinstance(video_url, str):
-        video_url = video_url.strip() or None
+        video_url_str = video_url.strip()
+        video_url = video_url_str if video_url_str else None
     else:
         video_url = None
     
-    if form_audio_url:
-        audio_url = str(form_audio_url).strip() if str(form_audio_url).strip() else None
+    if form_audio_url and not isinstance(form_audio_url, UploadFile):
+        audio_url_str = str(form_audio_url).strip()
+        audio_url = audio_url_str if audio_url_str else None
     elif audio_url and isinstance(audio_url, str):
-        audio_url = audio_url.strip() or None
+        audio_url_str = audio_url.strip()
+        audio_url = audio_url_str if audio_url_str else None
     else:
         audio_url = None
     
@@ -1792,6 +1815,11 @@ async def merge_audio_and_video(
         video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
         
         for key, value in form.items():
+            # Skip cookie files - they're not video files
+            key_lower = key.lower()
+            if 'cookie' in key_lower:
+                continue
+            
             is_upload_file = (
                 isinstance(value, UploadFile) or 
                 type(value).__name__ == "UploadFile" or
@@ -1808,6 +1836,11 @@ async def merge_audio_and_video(
         if not uploaded_video_file:
             # Try first file as video if no extension match
             for key, value in form.items():
+                # Skip cookie files - they're not video files
+                key_lower = key.lower()
+                if 'cookie' in key_lower:
+                    continue
+                
                 is_upload_file = (
                     isinstance(value, UploadFile) or 
                     type(value).__name__ == "UploadFile" or
@@ -1840,12 +1873,18 @@ async def merge_audio_and_video(
     
     # Final check: If audio_url is still None, search all form keys (case-insensitive)
     # This handles cases where the form key might be different
+    # But skip keys that are clearly file uploads (not URL fields)
     if not audio_url:
         for key in form.keys():
+            value = form.get(key)
+            # Skip UploadFile objects - they're files, not URLs
+            if isinstance(value, UploadFile):
+                continue
+            
             key_lower = key.lower().replace('-', '_').replace(' ', '_')
-            if key_lower in ['audio_url', 'audiourl', 'audio', 'audiofileurl']:
-                value = form.get(key)
-                if value and not isinstance(value, UploadFile):
+            # Only check URL-specific keys, not generic 'audio' (which might be a file upload field name)
+            if key_lower in ['audio_url', 'audiourl', 'audiofileurl']:
+                if value:
                     audio_url = str(value).strip() if str(value).strip() else None
                     if audio_url:
                         break
@@ -1904,6 +1943,11 @@ async def merge_audio_and_video(
         audio_extensions = {'.mp3', '.wav', '.aac', '.m4a', '.ogg', '.flac', '.wma'}
         
         for key, value in form.items():
+            # Skip cookie files - they're not audio files
+            key_lower = key.lower()
+            if 'cookie' in key_lower:
+                continue
+            
             is_upload_file = (
                 isinstance(value, UploadFile) or 
                 type(value).__name__ == "UploadFile" or
@@ -1921,6 +1965,11 @@ async def merge_audio_and_video(
         if not audio_file:
             # Try to find any file as audio (skip the uploaded video file if it exists)
             for key, value in form.items():
+                # Skip cookie files - they're not audio files
+                key_lower = key.lower()
+                if 'cookie' in key_lower:
+                    continue
+                
                 is_upload_file = (
                     isinstance(value, UploadFile) or 
                     type(value).__name__ == "UploadFile" or
@@ -1946,6 +1995,17 @@ async def merge_audio_and_video(
         
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         audio_filename = audio_file.filename or "audio"
+        # Ensure filename has an extension - try to detect from content-type
+        if not Path(audio_filename).suffix:
+            # Try to get extension from content-type header
+            content_type = getattr(audio_file, 'content_type', None)
+            if content_type:
+                ext = mimetypes.guess_extension(content_type.split(';')[0].strip())
+                if ext:
+                    audio_filename = f"{audio_filename}{ext}"
+            # If no extension can be determined, leave it as-is
+            # FFmpeg/MoviePy can auto-detect format from file headers
+        
         audio_path = upload_dir / f"merge_audio_{timestamp}_{audio_filename}"
         
         # Save uploaded audio
