@@ -106,11 +106,56 @@ async def root():
 
 @app.get("/api/v1/health")
 async def health():
-    """Health check endpoint."""
-    return {
+    """Health check endpoint with system diagnostics."""
+    import shutil
+    import subprocess
+    
+    health_status = {
         "status": "healthy",
         "service": "video-generation",
+        "dependencies": {}
     }
+    
+    # Check FFMPEG availability
+    ffmpeg_path = shutil.which("ffmpeg")
+    ffmpeg_available = ffmpeg_path is not None
+    health_status["dependencies"]["ffmpeg"] = {
+        "available": ffmpeg_available,
+        "path": ffmpeg_path if ffmpeg_path else None
+    }
+    
+    # Get FFMPEG version if available
+    if ffmpeg_available:
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-version"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                version_line = result.stdout.split('\n')[0]
+                health_status["dependencies"]["ffmpeg"]["version"] = version_line
+            else:
+                health_status["dependencies"]["ffmpeg"]["error"] = "Version check failed"
+        except Exception as e:
+            health_status["dependencies"]["ffmpeg"]["error"] = str(e)
+    
+    # Check Node.js availability (for yt-dlp)
+    node_path = shutil.which("node")
+    health_status["dependencies"]["nodejs"] = {
+        "available": node_path is not None,
+        "path": node_path if node_path else None
+    }
+    
+    # Check yt-dlp availability
+    ytdlp_path = shutil.which("yt-dlp")
+    health_status["dependencies"]["yt-dlp"] = {
+        "available": ytdlp_path is not None,
+        "path": ytdlp_path if ytdlp_path else None
+    }
+    
+    return health_status
 
 
 @app.exception_handler(Exception)
