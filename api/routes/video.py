@@ -19,7 +19,6 @@ sys.path.insert(0, str(project_root))
 
 from api.core.job_manager import JobManager, JobStatus
 from api.services.video_processor import VideoProcessor
-from api.services.ytdlp_service import YTDLPService
 
 router = APIRouter()
 
@@ -31,24 +30,22 @@ def get_job_manager(request: Request) -> JobManager:
 
 async def get_video_input(
     form: dict,
-    video_url: Optional[str] = None,
     upload_dir: Optional[Path] = None,
     prefix: str = "video",
 ) -> Tuple[Path, str]:
     """
-    Helper function to get video input from either URL or file upload.
+    Helper function to get video input from file upload.
     
     Args:
         form: Form data dictionary
-        video_url: Optional URL to download video from
-        upload_dir: Directory to save uploaded/downloaded videos
+        upload_dir: Directory to save uploaded videos
         prefix: Prefix for the saved filename
         
     Returns:
         Tuple of (local_file_path, original_filename)
         
     Raises:
-        HTTPException: If neither URL nor file is provided, or both are provided
+        HTTPException: If no file is provided
     """
     if upload_dir is None:
         upload_dir = project_root / "temp_videos" / "uploads"
@@ -56,7 +53,7 @@ async def get_video_input(
     
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     
-    # Check if both URL and file are provided
+    # Find video file in form data
     video_file = None
     for key, value in form.items():
         # Skip cookie files - they're not video files
@@ -73,65 +70,7 @@ async def get_video_input(
             video_file = value
             break
     
-    if video_url and video_file:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "Both video_url and file upload provided",
-                "help": "Provide either a video_url parameter OR upload a file, not both"
-            }
-        )
-    
-    if video_url:
-        # Download from URL using yt-dlp
-        try:
-            # Create output directory for downloaded video
-            download_dir = upload_dir / "url_downloads"
-            download_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Initialize yt-dlp service
-            ytdlp_service = YTDLPService(output_dir=download_dir)
-            
-            # Download video synchronously (we're in an async function, but download_video is sync)
-            # We'll use asyncio to run it in executor
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                ytdlp_service.download_video,
-                video_url,
-                None,  # output_filename - let it use default
-                "best",  # quality
-                "mp4",  # format_type
-                False,  # audio_only
-                None,  # cookies_file
-            )
-            
-            downloaded_path = Path(result["output_path"])
-            if not downloaded_path.exists():
-                raise Exception("Downloaded file not found")
-            
-            # Generate a standardized filename with prefix
-            original_filename = result.get("filename", "downloaded_video")
-            file_extension = downloaded_path.suffix
-            new_filename = f"{prefix}_{timestamp}_{Path(original_filename).stem}{file_extension}"
-            input_path = upload_dir / new_filename
-            
-            # Move/copy the downloaded file to uploads directory with standardized name
-            import shutil
-            shutil.move(str(downloaded_path), str(input_path))
-            
-            return input_path, original_filename
-            
-        except Exception as e:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"Failed to download video from URL: {str(e)}",
-                    "url": video_url,
-                }
-            )
-    
-    elif video_file:
+    if video_file:
         # Handle file upload
         input_filename = video_file.filename or "video"
         # Ensure filename has an extension - try to detect from content-type
@@ -155,13 +94,13 @@ async def get_video_input(
         return input_path, input_filename
     
     else:
-        # Neither URL nor file provided
+        # No file provided
         available_fields = list(form.keys())
         raise HTTPException(
             status_code=400,
             detail={
-                "error": "No video input provided",
-                "help": "Either provide a video_url parameter OR upload a video file",
+                "error": "No video file provided",
+                "help": "Upload a video file with any field name (e.g., 'video', 'file', 'upload', etc.)",
                 "available_fields": available_fields,
             }
         )
@@ -171,14 +110,11 @@ async def get_video_input(
 async def remove_audio_from_video(
     background_tasks: BackgroundTasks,
     request: Request,
-    video_url: Optional[str] = Form(None),
 ):
     """
-    Upload a video (or provide URL) and remove its audio track.
+    Upload a video file and remove its audio track.
     
-    Either:
-    - Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
-    - OR provide a video_url parameter with a URL to download from (YouTube, Instagram, etc.)
+    Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
     
     The file/request must be sent as multipart/form-data.
     
@@ -199,15 +135,14 @@ async def remove_audio_from_video(
                 "content_type_received": content_type,
                 "expected": "multipart/form-data",
                 "parsing_error": str(e),
-                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File' OR add video_url parameter, 4) Make sure no Content-Type header is manually set"
+                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File', 4) Make sure no Content-Type header is manually set"
             }
         )
     
     try:
-        # Get video input (from URL or file upload)
+        # Get video input from file upload
         input_path, input_filename = await get_video_input(
             form=form,
-            video_url=video_url,
             prefix="input",
         )
         
@@ -225,7 +160,6 @@ async def remove_audio_from_video(
                 "input_path": str(input_path),
                 "output_path": str(output_path),
                 "original_filename": input_filename,
-                "video_url": video_url if video_url else None,
             },
             output_path=output_path,
         )
@@ -334,14 +268,11 @@ async def process_video_remove_audio(
 async def detect_scenes_in_video(
     background_tasks: BackgroundTasks,
     request: Request,
-    video_url: Optional[str] = Form(None),
 ):
     """
-    Upload a video (or provide URL) and detect scene cuts.
+    Upload a video file and detect scene cuts.
     
-    Either:
-    - Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
-    - OR provide a video_url parameter with a URL to download from (YouTube, Instagram, etc.)
+    Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
     
     Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
     When completed, the job result will contain scene information.
@@ -361,15 +292,14 @@ async def detect_scenes_in_video(
                 "content_type_received": content_type,
                 "expected": "multipart/form-data",
                 "parsing_error": str(e),
-                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File' OR add video_url parameter"
+                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File'"
             }
         )
     
     try:
-        # Get video input (from URL or file upload)
+        # Get video input from file upload
         input_path, input_filename = await get_video_input(
             form=form,
-            video_url=video_url,
             prefix="scene_detection",
         )
         
@@ -387,7 +317,6 @@ async def detect_scenes_in_video(
                 "input_path": str(input_path),
                 "output_path": str(output_path),
                 "original_filename": input_filename,
-                "video_url": video_url if video_url else None,
             },
             output_path=output_path,
         )
@@ -517,7 +446,7 @@ async def download_video(job_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Job not found")
     
     # Allow download for video output jobs
-    if job["type"] not in ["remove_audio", "color_grading", "crop_zoom", "reencode", "merge_audio_video", "comprehensive", "ytdlp_download"]:
+    if job["type"] not in ["remove_audio", "color_grading", "crop_zoom", "reencode", "merge_audio_video", "comprehensive"]:
         raise HTTPException(
             status_code=400,
             detail=f"This endpoint is for video downloads only. Job type: {job['type']}",
@@ -641,245 +570,7 @@ async def download_scene_data(job_id: str, request: Request):
     )
 
 
-@router.post("/videos/download-audio-from-url")
-async def download_audio_from_url(
-    background_tasks: BackgroundTasks,
-    request: Request,
-    url: str = Form(...),
-    output_filename: Optional[str] = Form(None),
-):
-    """
-    Download audio only from a video URL using yt-dlp.
-    
-    Downloads audio track from YouTube, Instagram, Vimeo, and other platforms supported by yt-dlp.
-    The audio is extracted and saved as MP3.
-    
-    Parameters (form-data):
-    - url: URL of the video to extract audio from (required)
-    - output_filename: Optional custom filename (without extension)
-    
-    Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
-    When completed, download the audio via GET /api/v1/videos/{job_id}/download
-    """
-    job_manager: JobManager = get_job_manager(request)
-    
-    # Parse form data to extract cookies file if provided
-    try:
-        form = await request.form()
-    except Exception:
-        form = {}
-    
-    # Validate URL
-    if not url or not url.strip():
-        raise HTTPException(status_code=400, detail="URL parameter is required")
-    
-    # Create job
-    job_id = job_manager.create_job(
-        job_type="ytdlp_audio_download",
-        parameters={
-            "url": url,
-            "audio_only": True,
-            "output_filename": output_filename,
-        },
-    )
-    
-    # Prepare output directory
-    output_dir = project_root / "temp_videos" / "output" / "ytdlp_downloads"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Generate output filename
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    if output_filename:
-        safe_filename = "".join(c for c in output_filename if c.isalnum() or c in (' ', '-', '_')).strip()
-        output_path = output_dir / f"{safe_filename}.mp3"
-    else:
-        output_path = output_dir / f"audio_download_{timestamp}.mp3"
-    
-    # Start background processing
-    background_tasks.add_task(
-        process_ytdlp_download,
-        job_id=job_id,
-        url=url,
-        output_path=str(output_path),
-        quality="best",  # Not used for audio, but required parameter
-        format_type="mp3",
-        audio_only=True,  # This is the key parameter
-        output_filename=output_filename,
-        cookies_file=None,
-        job_manager=job_manager,
-    )
-    
-    # Return job_id immediately
-    return {
-        "job_id": job_id,
-        "status": "pending",
-        "message": "Audio download started",
-        "status_url": f"/api/v1/jobs/{job_id}",
-        "download_url": f"/api/v1/videos/{job_id}/download",
-    }
-
-
-@router.post("/videos/download-from-url")
-async def download_video_from_url(
-    background_tasks: BackgroundTasks,
-    request: Request,
-    url: str = Form(...),
-    quality: Optional[str] = Form("best"),
-    format_type: Optional[str] = Form("mp4"),
-    audio_only: Optional[bool] = Form(False),
-    output_filename: Optional[str] = Form(None),
-):
-    """
-    Download a video from a URL using yt-dlp (subprocess-based implementation).
-    
-    Supports YouTube, Vimeo, and other platforms supported by yt-dlp.
-    
-    Parameters (form-data):
-    - url: URL of the video to download (required)
-    - quality: Video quality ('best', 'worst', '720p', '1080p', etc.) - default: 'best'
-    - format_type: Output format ('mp4', 'webm', etc.) - default: 'mp4'
-    - audio_only: If True, download audio only (as mp3) - default: False
-    - output_filename: Optional custom filename (without extension)
-    
-    Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status.
-    When completed, download the video via GET /api/v1/videos/{job_id}/download
-    """
-    job_manager: JobManager = get_job_manager(request)
-    
-    # Validate URL
-    if not url or not url.strip():
-        raise HTTPException(status_code=400, detail="URL parameter is required")
-    
-    # Create job
-    job_id = job_manager.create_job(
-        job_type="ytdlp_download",
-        parameters={
-            "url": url,
-            "quality": quality,
-            "format_type": format_type,
-            "audio_only": audio_only,
-            "output_filename": output_filename,
-        },
-    )
-    
-    # Prepare output directory
-    output_dir = project_root / "temp_videos" / "output" / "ytdlp_downloads"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Generate output filename
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    if output_filename:
-        safe_filename = "".join(c for c in output_filename if c.isalnum() or c in (' ', '-', '_')).strip()
-        output_path = output_dir / f"{safe_filename}.{format_type if not audio_only else 'mp3'}"
-    else:
-        output_path = output_dir / f"download_{timestamp}.{format_type if not audio_only else 'mp3'}"
-    
-    # Start background processing
-    background_tasks.add_task(
-        process_ytdlp_download,
-        job_id=job_id,
-        url=url,
-        output_path=str(output_path),
-        quality=quality,
-        format_type=format_type,
-        audio_only=audio_only,
-        output_filename=output_filename,
-        cookies_file=None,
-        job_manager=job_manager,
-    )
-    
-    # Return job_id immediately
-    return {
-        "job_id": job_id,
-        "status": "pending",
-        "message": "Download started",
-        "status_url": f"/api/v1/jobs/{job_id}",
-        "download_url": f"/api/v1/videos/{job_id}/download",
-    }
-
-
-async def process_ytdlp_download(
-    job_id: str,
-    url: str,
-    output_path: str,
-    quality: str,
-    format_type: str,
-    audio_only: bool,
-    output_filename: Optional[str],
-    cookies_file: Optional[str],
-    job_manager: JobManager,
-):
-    """
-    Background task to download video using yt-dlp.
-    """
-    try:
-        job_manager.update_job(
-            job_id,
-            status=JobStatus.PROCESSING,
-            progress=10,
-            message="Initializing download...",
-        )
-        
-        # Initialize yt-dlp service
-        output_dir = Path(output_path).parent
-        ytdlp_service = YTDLPService(output_dir=output_dir)
-        
-        job_manager.update_job(
-            job_id,
-            progress=20,
-            message="Connecting to video source...",
-        )
-        
-        # Run download in executor to avoid blocking
-        loop = asyncio.get_event_loop()
-        
-        job_manager.update_job(
-            job_id,
-            progress=30,
-            message="Downloading video...",
-        )
-        
-        # Download video (runs in thread pool)
-        result = await loop.run_in_executor(
-            None,
-            ytdlp_service.download_video,
-            url,
-            output_filename,
-            quality,
-            format_type,
-            audio_only,
-            None,
-        )
-        
-        job_manager.update_job(
-            job_id,
-            progress=90,
-            message="Download completed, finalizing...",
-        )
-        
-        # Verify output file exists
-        actual_output_path = Path(result["output_path"])
-        if not actual_output_path.exists():
-            raise Exception("Downloaded file was not found")
-        
-        # Update job to completed
-        job_manager.update_job(
-            job_id,
-            status=JobStatus.COMPLETED,
-            progress=100,
-            message="Download completed successfully",
-            output_path=actual_output_path,
-        )
-    
-    except Exception as e:
-        error_msg = str(e)
-        job_manager.update_job(
-            job_id,
-            status=JobStatus.FAILED,
-            error=error_msg,
-            message=f"Download failed: {error_msg}",
-        )
-
+# Download endpoints removed - file uploads only supported now
 
 @router.post("/videos/color-grade")
 async def color_grade_video(
@@ -889,14 +580,11 @@ async def color_grade_video(
     brightness: Optional[float] = Form(None),
     contrast: Optional[float] = Form(None),
     saturation: Optional[float] = Form(None),
-    video_url: Optional[str] = Form(None),
 ):
     """
-    Upload a video (or provide URL) and apply color grading.
+    Upload a video file and apply color grading.
     
-    Either:
-    - Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
-    - OR provide a video_url parameter with a URL to download from (YouTube, Instagram, etc.)
+    Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
     
     The file/request must be sent as multipart/form-data.
     
@@ -970,15 +658,14 @@ async def color_grade_video(
                 "content_type_received": content_type,
                 "expected": "multipart/form-data",
                 "parsing_error": str(e),
-                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File' OR add video_url parameter"
+                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File'"
             }
         )
     
     try:
-        # Get video input (from URL or file upload)
+        # Get video input from file upload
         input_path, input_filename = await get_video_input(
             form=form,
-            video_url=video_url,
             prefix="color_grade",
         )
         
@@ -1001,7 +688,6 @@ async def color_grade_video(
                 "contrast": contrast,
                 "saturation": saturation,
                 "was_random": use_random,  # Track if random was used
-                "video_url": video_url if video_url else None,
             },
             output_path=output_path,
         )
@@ -1134,14 +820,11 @@ async def crop_and_zoom_video(
     request: Request,
     aspect_ratio: Optional[str] = Form(None),
     background_color: Optional[str] = Form(None),
-    video_url: Optional[str] = Form(None),
 ):
     """
-    Upload a video (or provide URL) and crop it to any aspect ratio, outputting as 9:16.
+    Upload a video file and crop it to any aspect ratio, outputting as 9:16.
     
-    Either:
-    - Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
-    - OR provide a video_url parameter with a URL to download from (YouTube, Instagram, etc.)
+    Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
     
     The file/request must be sent as multipart/form-data.
     
@@ -1210,15 +893,14 @@ async def crop_and_zoom_video(
                 "content_type_received": content_type,
                 "expected": "multipart/form-data",
                 "parsing_error": str(e),
-                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File' OR add video_url parameter"
+                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File'"
             }
         )
     
     try:
-        # Get video input (from URL or file upload)
+        # Get video input from file upload
         input_path, input_filename = await get_video_input(
             form=form,
-            video_url=video_url,
             prefix="crop_zoom",
         )
         
@@ -1241,7 +923,6 @@ async def crop_and_zoom_video(
                 "original_filename": input_filename,
                 "aspect_ratio": aspect_ratio,
                 "background_color": background_color,
-                "video_url": video_url if video_url else None,
             },
             output_path=output_path,
         )
@@ -1363,14 +1044,11 @@ async def reencode_video(
     codec: Optional[str] = Form("libx264"),
     bitrate: Optional[str] = Form(None),
     fps: Optional[float] = Form(None),
-    video_url: Optional[str] = Form(None),
 ):
     """
-    Upload a video (or provide URL) and re-encode it with specified settings.
+    Upload a video file and re-encode it with specified settings.
     
-    Either:
-    - Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
-    - OR provide a video_url parameter with a URL to download from (YouTube, Instagram, etc.)
+    Upload a file with any field name (e.g., 'video', 'file', 'upload', etc.)
     
     The file/request must be sent as multipart/form-data.
     
@@ -1396,16 +1074,15 @@ async def reencode_video(
                 "content_type_received": content_type,
                 "expected": "multipart/form-data",
                 "parsing_error": str(e),
-                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File' OR add video_url parameter"
+                "help": "In Postman: 1) Select 'Body' tab, 2) Choose 'form-data' (not raw/json), 3) Add key with type 'File'"
             }
         )
     
     input_path = None  # Initialize to avoid UnboundLocalError
     try:
-        # Get video input (from URL or file upload)
+        # Get video input from file upload
         input_path, input_filename = await get_video_input(
             form=form,
-            video_url=video_url,
             prefix="reencode",
         )
         
@@ -1427,7 +1104,6 @@ async def reencode_video(
                 "codec": codec,
                 "bitrate": bitrate,
                 "fps": fps,
-                "video_url": video_url if video_url else None,
             },
             output_path=output_path,
         )
@@ -1543,22 +1219,17 @@ async def process_reencode(
 async def merge_audio_and_video(
     background_tasks: BackgroundTasks,
     request: Request,
-    video_url: Optional[str] = Form(None),
-    audio_url: Optional[str] = Form(None),
 ):
     """
-    Upload a video file (or provide URL) and an audio file (or provide URL), merge them together.
+    Upload a video file and an audio file, merge them together.
     
     The longer of the two will be clipped to match the shorter duration.
     
     Video input:
     - Upload a video file with any field name (e.g., 'video', 'file', etc.)
-    - OR provide a video_url parameter with a URL to download from (YouTube, Instagram, etc.)
     
     Audio input:
     - Upload an audio file with any field name (e.g., 'audio', 'file', etc.)
-    - OR provide an audio_url parameter with a URL to download audio from (YouTube, Instagram, etc.)
-      The audio will be extracted using yt-dlp with audio-only mode.
     
     The files/request must be sent as multipart/form-data.
     
@@ -1583,60 +1254,34 @@ async def merge_audio_and_video(
             }
         )
     
-    # Extract URLs from form - ALWAYS check form dict first, then use parameter if form doesn't have it
-    # This ensures we get the values even if Form() parameter extraction fails
-    form_video_url = form.get("video_url")
-    form_audio_url = form.get("audio_url")
-    
-    # Prioritize form dict values, fallback to parameter
-    # Only use URL if it's a non-empty string (not empty string, None, or UploadFile)
-    if form_video_url and not isinstance(form_video_url, UploadFile):
-        video_url_str = str(form_video_url).strip()
-        video_url = video_url_str if video_url_str else None
-    elif video_url and isinstance(video_url, str):
-        video_url_str = video_url.strip()
-        video_url = video_url_str if video_url_str else None
-    else:
-        video_url = None
-    
-    if form_audio_url and not isinstance(form_audio_url, UploadFile):
-        audio_url_str = str(form_audio_url).strip()
-        audio_url = audio_url_str if audio_url_str else None
-    elif audio_url and isinstance(audio_url, str):
-        audio_url_str = audio_url.strip()
-        audio_url = audio_url_str if audio_url_str else None
-    else:
-        audio_url = None
-    
     # Generate timestamp once for use throughout the function
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     
-    # Handle video input (from URL or file upload)
-    video_path = None
-    video_filename = None
-    uploaded_video_file = None  # Track if we got video from file upload
+    # Find video file in form data
+    video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
+    uploaded_video_file = None
     
-    if video_url and video_url.strip():
-        # Download video from URL
-        try:
-            video_path, video_filename = await get_video_input(
-                form={},  # Empty form since we're using URL
-                video_url=video_url,
-                prefix="merge_video",
-            )
-                
-        except Exception as e:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"Failed to download video from URL: {str(e)}",
-                    "url": video_url,
-                }
-            )
-    else:
-        # Find video file in form data
-        video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
+    for key, value in form.items():
+        # Skip cookie files - they're not video files
+        key_lower = key.lower()
+        if 'cookie' in key_lower:
+            continue
         
+        is_upload_file = (
+            isinstance(value, UploadFile) or 
+            type(value).__name__ == "UploadFile" or
+            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
+        )
+        
+        if is_upload_file:
+            filename = getattr(value, 'filename', '')
+            ext = Path(filename).suffix.lower()
+            if ext in video_extensions:
+                uploaded_video_file = value
+                break
+    
+    if not uploaded_video_file:
+        # Try first file as video if no extension match
         for key, value in form.items():
             # Skip cookie files - they're not video files
             key_lower = key.lower()
@@ -1648,116 +1293,50 @@ async def merge_audio_and_video(
                 type(value).__name__ == "UploadFile" or
                 (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
             )
-            
             if is_upload_file:
-                filename = getattr(value, 'filename', '')
-                ext = Path(filename).suffix.lower()
-                if ext in video_extensions:
-                    uploaded_video_file = value
-                    break
-        
-        if not uploaded_video_file:
-            # Try first file as video if no extension match
-            for key, value in form.items():
-                # Skip cookie files - they're not video files
-                key_lower = key.lower()
-                if 'cookie' in key_lower:
-                    continue
-                
-                is_upload_file = (
-                    isinstance(value, UploadFile) or 
-                    type(value).__name__ == "UploadFile" or
-                    (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
-                )
-                if is_upload_file:
-                    uploaded_video_file = value
-                    break
-        
-        if uploaded_video_file:
-            video_path, video_filename = await get_video_input(
-                form={key: uploaded_video_file for key, value in form.items() if value == uploaded_video_file},
-                video_url=None,
-                prefix="merge_video"
-            )
-        
-        if not video_path:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "Video input is required",
-                    "help": "Either provide a video_url parameter OR upload a video file"
-                }
-            )
+                uploaded_video_file = value
+                break
     
-    # Handle audio input (from URL or file upload)
-    audio_path = None
-    audio_filename = None
-    uploaded_audio_file = None
+    if not uploaded_video_file:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Video input is required",
+                "help": "Upload a video file with any field name"
+            }
+        )
     
-    # Final check: If audio_url is still None, search all form keys (case-insensitive)
-    # This handles cases where the form key might be different
-    # But skip keys that are clearly file uploads (not URL fields)
-    if not audio_url:
-        for key in form.keys():
-            value = form.get(key)
-            # Skip UploadFile objects - they're files, not URLs
-            if isinstance(value, UploadFile):
-                continue
-            
-            key_lower = key.lower().replace('-', '_').replace(' ', '_')
-            # Only check URL-specific keys, not generic 'audio' (which might be a file upload field name)
-            if key_lower in ['audio_url', 'audiourl', 'audiofileurl']:
-                if value:
-                    audio_url = str(value).strip() if str(value).strip() else None
-                    if audio_url:
-                        break
+    # Get video input from file upload
+    video_path, video_filename = await get_video_input(
+        form={key: uploaded_video_file for key, value in form.items() if value == uploaded_video_file},
+        prefix="merge_video"
+    )
     
-    # Now check if we have audio_url - if yes, download it; if no, look for file upload
-    if audio_url and audio_url.strip():
-        # Download audio from URL using yt-dlp with audio_only=True (same pattern as download-from-url)
-        try:
-            # Prepare output directory for audio download
-            audio_download_dir = project_root / "temp_videos" / "uploads"
-            audio_download_dir.mkdir(parents=True, exist_ok=True)
-            
-            audio_output_filename = f"merge_audio_download_{timestamp}"
-            audio_output_path = audio_download_dir / f"{audio_output_filename}.mp3"
-            
-            # Initialize yt-dlp service (same as download-from-url)
-            ytdlp_service = YTDLPService(output_dir=audio_download_dir)
-            
-            # Run download in executor to avoid blocking (same pattern as process_ytdlp_download)
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                ytdlp_service.download_video,
-                audio_url,
-                audio_output_filename,
-                "best",  # quality
-                "mp3",   # format_type
-                True,    # audio_only
-                None,  # cookies_file
-            )
-            
-            audio_path = Path(result["output_path"])
-            if not audio_path.exists():
-                raise Exception("Downloaded audio file was not found")
-            
-            audio_filename = audio_path.name
-            
-        except Exception as e:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"Failed to download audio from URL: {str(e)}",
-                    "url": audio_url,
-                }
-            )
-    else:
-        # Find audio file in form data
-        audio_file = None
-        audio_extensions = {'.mp3', '.wav', '.aac', '.m4a', '.ogg', '.flac', '.wma'}
+    # Find audio file in form data
+    audio_file = None
+    audio_extensions = {'.mp3', '.wav', '.aac', '.m4a', '.ogg', '.flac', '.wma'}
+    
+    for key, value in form.items():
+        # Skip cookie files - they're not audio files
+        key_lower = key.lower()
+        if 'cookie' in key_lower:
+            continue
         
+        is_upload_file = (
+            isinstance(value, UploadFile) or 
+            type(value).__name__ == "UploadFile" or
+            (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
+        )
+        
+        if is_upload_file and value != uploaded_video_file:  # Don't use same file as video
+            filename = getattr(value, 'filename', '')
+            ext = Path(filename).suffix.lower()
+            if ext in audio_extensions:
+                audio_file = value
+                break
+    
+    if not audio_file:
+        # Try to find any file as audio (skip the uploaded video file if it exists)
         for key, value in form.items():
             # Skip cookie files - they're not audio files
             key_lower = key.lower()
@@ -1769,71 +1348,43 @@ async def merge_audio_and_video(
                 type(value).__name__ == "UploadFile" or
                 (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
             )
-            
-            if is_upload_file and value != uploaded_video_file:  # Don't use same file as video
-                filename = getattr(value, 'filename', '')
-                ext = Path(filename).suffix.lower()
-                if ext in audio_extensions:
-                    audio_file = value
-                    uploaded_audio_file = value
-                    break
-        
-        if not audio_file:
-            # Try to find any file as audio (skip the uploaded video file if it exists)
-            for key, value in form.items():
-                # Skip cookie files - they're not audio files
-                key_lower = key.lower()
-                if 'cookie' in key_lower:
-                    continue
-                
-                is_upload_file = (
-                    isinstance(value, UploadFile) or 
-                    type(value).__name__ == "UploadFile" or
-                    (hasattr(value, 'filename') and hasattr(value, 'read') and hasattr(value, 'file'))
-                )
-                if is_upload_file and value != uploaded_video_file:
-                    audio_file = value
-                    uploaded_audio_file = value
-                    break
-        
-        if not audio_file:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "Audio input is required",
-                    "help": "Either provide an audio_url parameter OR upload an audio file (mp3, wav, aac, etc.)"
-                }
-            )
-        
-        # Save uploaded audio file
-        upload_dir = project_root / "temp_videos" / "uploads"
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        
-        audio_filename = audio_file.filename or "audio"
-        # Ensure filename has an extension - try to detect from content-type
-        if not Path(audio_filename).suffix:
-            # Try to get extension from content-type header
-            content_type = getattr(audio_file, 'content_type', None)
-            if content_type:
-                ext = mimetypes.guess_extension(content_type.split(';')[0].strip())
-                if ext:
-                    audio_filename = f"{audio_filename}{ext}"
-            # If no extension can be determined, leave it as-is
-            # FFmpeg/MoviePy can auto-detect format from file headers
-        
-        audio_path = upload_dir / f"merge_audio_{timestamp}_{audio_filename}"
-        
-        # Save uploaded audio
-        with open(audio_path, "wb") as f:
-            content = await audio_file.read()
-            f.write(content)
+            if is_upload_file and value != uploaded_video_file:
+                audio_file = value
+                break
+    
+    if not audio_file:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Audio input is required",
+                "help": "Upload an audio file (mp3, wav, aac, etc.)"
+            }
+        )
+    
+    # Save uploaded audio file
+    upload_dir = project_root / "temp_videos" / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    audio_filename = audio_file.filename or "audio"
+    # Ensure filename has an extension - try to detect from content-type
+    if not Path(audio_filename).suffix:
+        # Try to get extension from content-type header
+        content_type = getattr(audio_file, 'content_type', None)
+        if content_type:
+            ext = mimetypes.guess_extension(content_type.split(';')[0].strip())
+            if ext:
+                audio_filename = f"{audio_filename}{ext}"
+        # If no extension can be determined, leave it as-is
+        # MoviePy can auto-detect format from file headers
+    
+    audio_path = upload_dir / f"merge_audio_{timestamp}_{audio_filename}"
+    
+    # Save uploaded audio
+    with open(audio_path, "wb") as f:
+        content = await audio_file.read()
+        f.write(content)
     
     try:
-        if not video_path:
-            raise HTTPException(status_code=400, detail="Video input is required (either video_url or video file upload)")
-        
-        if not audio_path:
-            raise HTTPException(status_code=400, detail="Audio input is required (either audio_url or audio file upload)")
         
         # Create output path
         output_dir = project_root / "temp_videos" / "output" / "merge_audio_video"
@@ -1851,8 +1402,6 @@ async def merge_audio_and_video(
                 "output_path": str(output_path),
                 "video_filename": video_filename,
                 "audio_filename": audio_filename,
-                "video_url": video_url if video_url else None,
-                "audio_url": audio_url if audio_url else None,
             },
             output_path=output_path,
         )
@@ -1982,12 +1531,11 @@ async def process_video_comprehensive(
     codec: Optional[str] = Form("libx264"),
     bitrate: Optional[str] = Form(None),
     fps: Optional[float] = Form(None),
-    video_url: Optional[str] = Form(None),
 ):
     """
     Comprehensive video processing endpoint - apply multiple transformations in one request.
     
-    Upload a video file (or provide URL) and optionally an audio file, then apply multiple processing operations
+    Upload a video file and optionally an audio file, then apply multiple processing operations
     based on boolean flags. All operations are applied in sequence:
     1. Merge audio (if merge_audio=True and audio file provided)
     2. Remove audio (if remove_audio=True, overrides merge_audio)
@@ -1995,9 +1543,7 @@ async def process_video_comprehensive(
     4. Crop and zoom to specified aspect ratio, then pad to 9:16 with background color (if crop_zoom=True)
     5. Re-encode (if reencode=True)
     
-    Either:
-    - Upload a video file with any field name (and optionally an audio file)
-    - OR provide a video_url parameter with a URL to download from (YouTube, Instagram, etc.)
+    Upload a video file with any field name (and optionally an audio file).
     
     The files/request must be sent as multipart/form-data.
     
@@ -2095,10 +1641,9 @@ async def process_video_comprehensive(
             crop_background_color = random.choice(colors)
     
     try:
-        # Get video input (from URL or file upload)
+        # Get video input from file upload
         input_video_path, video_filename = await get_video_input(
             form=form,
-            video_url=video_url,
             prefix="process",
         )
         
@@ -2175,7 +1720,6 @@ async def process_video_comprehensive(
                 "output_path": str(output_path),
                 "video_filename": video_filename,
                 "audio_filename": audio_file.filename if audio_file else None,
-                "video_url": video_url if video_url else None,
                 "remove_audio": remove_audio,
                 "merge_audio": merge_audio,
                 "color_grading": color_grading,

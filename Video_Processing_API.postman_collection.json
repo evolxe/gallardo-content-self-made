@@ -1,8 +1,8 @@
 {
 	"info": {
-		"_postman_id": "video-processing-api-collection-v2",
-		"name": "Video Processing API - Complete",
-		"description": "Comprehensive video processing API with all endpoints. Supports video downloads, processing, and job management. All endpoints use multipart/form-data for file uploads.",
+		"_postman_id": "video-processing-api-collection-v3",
+		"name": "Video Processing API - File Uploads Only",
+		"description": "Comprehensive video processing API with all endpoints. All endpoints require file uploads via multipart/form-data. URL downloads are no longer supported.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
 		"_exporter_id": "video-processing"
 	},
@@ -83,91 +83,6 @@
 			]
 		},
 		{
-			"name": "Video Downloads",
-			"item": [
-				{
-					"name": "Download Video from URL",
-					"request": {
-						"method": "POST",
-						"header": [],
-						"body": {
-							"mode": "formdata",
-							"formdata": [
-								{
-									"key": "url",
-									"value": "https://www.youtube.com/watch?v=EXAMPLE",
-									"type": "text",
-									"description": "REQUIRED: URL of the video to download (YouTube, Instagram, Vimeo, etc.)"
-								},
-								{
-									"key": "quality",
-									"value": "best",
-									"type": "text",
-									"description": "Optional: Video quality ('best', 'worst', '720p', '1080p', etc.). Default: 'best'"
-								},
-								{
-									"key": "format_type",
-									"value": "mp4",
-									"type": "text",
-									"description": "Optional: Output format ('mp4', 'webm', etc.). Default: 'mp4'"
-								},
-								{
-									"key": "audio_only",
-									"value": "false",
-									"type": "text",
-									"description": "Optional: If 'true', download audio only as MP3. Default: 'false'"
-								},
-								{
-									"key": "output_filename",
-									"value": "",
-									"type": "text",
-									"description": "Optional: Custom filename (without extension)"
-								}
-							]
-						},
-						"url": {
-							"raw": "{{base_url}}/api/v1/videos/download-from-url",
-							"host": ["{{base_url}}"],
-							"path": ["api", "v1", "videos", "download-from-url"]
-						},
-						"description": "Download a video from a URL using yt-dlp. Supports YouTube (via pytube), Vimeo, and other platforms. Returns a job_id to poll for status."
-					},
-					"response": []
-				},
-				{
-					"name": "Download Audio from URL",
-					"request": {
-						"method": "POST",
-						"header": [],
-						"body": {
-							"mode": "formdata",
-							"formdata": [
-								{
-									"key": "url",
-									"value": "https://www.youtube.com/watch?v=EXAMPLE",
-									"type": "text",
-									"description": "REQUIRED: URL of the video to extract audio from (YouTube, Instagram, Vimeo, etc.)"
-								},
-								{
-									"key": "output_filename",
-									"value": "",
-									"type": "text",
-									"description": "Optional: Custom filename (without extension)"
-								}
-							]
-						},
-						"url": {
-							"raw": "{{base_url}}/api/v1/videos/download-audio-from-url",
-							"host": ["{{base_url}}"],
-							"path": ["api", "v1", "videos", "download-audio-from-url"]
-						},
-						"description": "Download audio only from a video URL. Extracts audio as MP3. Returns a job_id to poll for status."
-					},
-					"response": []
-				}
-			]
-		},
-		{
 			"name": "Video Processing",
 			"item": [
 				{
@@ -182,13 +97,7 @@
 									"key": "video",
 									"type": "file",
 									"src": [],
-									"description": "Optional: Upload video file (any field name accepted: 'video', 'file', 'upload', etc.)"
-								},
-								{
-									"key": "video_url",
-									"value": "",
-									"type": "text",
-									"description": "Optional: URL to download video from (YouTube, Instagram, etc.). Either file upload OR video_url required."
+									"description": "REQUIRED: Upload video file (any field name accepted: 'video', 'file', 'upload', etc.)"
 								}
 							]
 						},
@@ -197,7 +106,7 @@
 							"host": ["{{base_url}}"],
 							"path": ["api", "v1", "videos", "remove-audio"]
 						},
-						"description": "Upload a video (or provide URL) and remove its audio track. Either upload a file OR provide video_url. Returns a job_id immediately."
+						"description": "Upload a video file and remove its audio track. Returns a job_id immediately. Use GET /api/v1/jobs/{job_id} to poll for status."
 					},
 					"response": []
 				},
@@ -213,13 +122,7 @@
 									"key": "video",
 									"type": "file",
 									"src": [],
-									"description": "Optional: Upload video file (any field name accepted)"
-								},
-								{
-									"key": "video_url",
-									"value": "",
-									"type": "text",
-									"description": "Optional: URL to download video from. Either file upload OR video_url required."
+									"description": "REQUIRED: Upload video file (any field name accepted)"
 								}
 							]
 						},
@@ -228,7 +131,7 @@
 							"host": ["{{base_url}}"],
 							"path": ["api", "v1", "videos", "detect-scenes"]
 						},
-						"description": "Upload a video (or provide URL) and detect scene cuts. Returns a job_id. When completed, use GET /api/v1/videos/{job_id}/scenes to get scene information."
+						"description": "Upload a video file and detect scene cuts. Returns a job_id. When completed, use GET /api/v1/videos/{job_id}/scenes to get scene information."
 					},
 					"response": []
 				},
@@ -244,13 +147,7 @@
 									"key": "video",
 									"type": "file",
 									"src": [],
-									"description": "Optional: Upload video file"
-								},
-								{
-									"key": "video_url",
-									"value": "",
-									"type": "text",
-									"description": "Optional: URL to download video from"
+									"description": "REQUIRED: Upload video file"
 								},
 								{
 									"key": "preset",
@@ -281,13 +178,7 @@
 									"key": "video",
 									"type": "file",
 									"src": [],
-									"description": "Optional: Upload video file"
-								},
-								{
-									"key": "video_url",
-									"value": "",
-									"type": "text",
-									"description": "Optional: URL to download video from"
+									"description": "REQUIRED: Upload video file"
 								},
 								{
 									"key": "preset",
@@ -336,13 +227,7 @@
 									"key": "video",
 									"type": "file",
 									"src": [],
-									"description": "Optional: Upload video file"
-								},
-								{
-									"key": "video_url",
-									"value": "",
-									"type": "text",
-									"description": "Optional: URL to download video from"
+									"description": "REQUIRED: Upload video file"
 								},
 								{
 									"key": "aspect_ratio",
@@ -379,13 +264,7 @@
 									"key": "video",
 									"type": "file",
 									"src": [],
-									"description": "Optional: Upload video file"
-								},
-								{
-									"key": "video_url",
-									"value": "",
-									"type": "text",
-									"description": "Optional: URL to download video from"
+									"description": "REQUIRED: Upload video file"
 								},
 								{
 									"key": "codec",
@@ -428,25 +307,13 @@
 									"key": "video",
 									"type": "file",
 									"src": [],
-									"description": "Optional: Upload video file (any field name accepted)"
-								},
-								{
-									"key": "video_url",
-									"value": "",
-									"type": "text",
-									"description": "Optional: URL to download video from. Either video file upload OR video_url required."
+									"description": "REQUIRED: Upload video file (any field name accepted)"
 								},
 								{
 									"key": "audio",
 									"type": "file",
 									"src": [],
-									"description": "Optional: Upload audio file (mp3, wav, aac, etc.)"
-								},
-								{
-									"key": "audio_url",
-									"value": "",
-									"type": "text",
-									"description": "Optional: URL to download audio from. Either audio file upload OR audio_url required."
+									"description": "REQUIRED: Upload audio file (mp3, wav, aac, etc.)"
 								}
 							]
 						},
@@ -455,7 +322,7 @@
 							"host": ["{{base_url}}"],
 							"path": ["api", "v1", "videos", "merge-audio-video"]
 						},
-						"description": "Merge an audio file with a video file. Both can be uploaded as files or provided as URLs. The longer of the two will be clipped to match the shorter duration."
+						"description": "Merge an audio file with a video file. Both files must be uploaded. The longer of the two will be clipped to match the shorter duration."
 					},
 					"response": []
 				}
@@ -476,13 +343,7 @@
 									"key": "video",
 									"type": "file",
 									"src": [],
-									"description": "Optional: Upload video file"
-								},
-								{
-									"key": "video_url",
-									"value": "",
-									"type": "text",
-									"description": "Optional: URL to download video from"
+									"description": "REQUIRED: Upload video file"
 								},
 								{
 									"key": "audio",
@@ -603,13 +464,7 @@
 									"key": "video",
 									"type": "file",
 									"src": [],
-									"description": "Optional: Upload video file"
-								},
-								{
-									"key": "video_url",
-									"value": "",
-									"type": "text",
-									"description": "Optional: URL to download video from"
+									"description": "REQUIRED: Upload video file"
 								},
 								{
 									"key": "color_grading",
