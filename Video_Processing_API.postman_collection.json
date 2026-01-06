@@ -22,7 +22,8 @@
 						"v1",
 						"health"
 					]
-				}
+				},
+				"description": "Health check endpoint to verify API is running"
 			},
 			"response": []
 		},
@@ -37,7 +38,8 @@
 						{
 							"key": "video",
 							"type": "file",
-							"src": []
+							"src": [],
+							"description": "Video file to process (any field name accepted)"
 						},
 						{
 							"key": "video_url",
@@ -80,7 +82,8 @@
 						{
 							"key": "video",
 							"type": "file",
-							"src": []
+							"src": [],
+							"description": "Video file to process"
 						},
 						{
 							"key": "video_url",
@@ -91,7 +94,8 @@
 						{
 							"key": "preset",
 							"value": "random",
-							"type": "text"
+							"type": "text",
+							"description": "Color grading preset (default: random)"
 						},
 						{
 							"key": "cookies_file",
@@ -128,7 +132,8 @@
 						{
 							"key": "video",
 							"type": "file",
-							"src": []
+							"src": [],
+							"description": "Video file to process"
 						},
 						{
 							"key": "video_url",
@@ -195,7 +200,8 @@
 						{
 							"key": "video",
 							"type": "file",
-							"src": []
+							"src": [],
+							"description": "Video file to analyze"
 						},
 						{
 							"key": "video_url",
@@ -228,7 +234,7 @@
 			"response": []
 		},
 		{
-			"name": "Crop and Zoom (1080x1080)",
+			"name": "Crop and Zoom (Square 1:1)",
 			"request": {
 				"method": "POST",
 				"header": [],
@@ -238,7 +244,8 @@
 						{
 							"key": "video",
 							"type": "file",
-							"src": []
+							"src": [],
+							"description": "Video file to process"
 						},
 						{
 							"key": "video_url",
@@ -247,10 +254,16 @@
 							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
 						},
 						{
-							"key": "output_size",
-							"value": "1080",
+							"key": "aspect_ratio",
+							"value": "1:1",
 							"type": "text",
-							"description": "Output square size in pixels (1080 = 1080x1080)"
+							"description": "Aspect ratio in W:H format (e.g., 1:1, 16:9, 4:3, 21:9). Default: 1:1"
+						},
+						{
+							"key": "background_color",
+							"value": "#000000",
+							"type": "text",
+							"description": "Background color (hex like #000000 or named color: black, white, red, green, blue, yellow, cyan, magenta, gray). Default: random"
 						},
 						{
 							"key": "cookies_file",
@@ -272,12 +285,12 @@
 						"crop-zoom"
 					]
 				},
-				"description": "Crop video to center 1:1 (square) aspect ratio. Default output size is 1080x1080."
+				"description": "Crop video to specified aspect ratio and pad to 9:16 (1080x1920) with background color. Output is always 9:16 format."
 			},
 			"response": []
 		},
 		{
-			"name": "Crop and Zoom (Original Size)",
+			"name": "Crop and Zoom (16:9)",
 			"request": {
 				"method": "POST",
 				"header": [],
@@ -287,7 +300,8 @@
 						{
 							"key": "video",
 							"type": "file",
-							"src": []
+							"src": [],
+							"description": "Video file to process"
 						},
 						{
 							"key": "video_url",
@@ -296,10 +310,16 @@
 							"description": "Optional: URL to download video from (YouTube, Instagram, etc.)"
 						},
 						{
-							"key": "output_size",
-							"value": "0",
+							"key": "aspect_ratio",
+							"value": "16:9",
 							"type": "text",
-							"description": "0 = keep original cropped resolution"
+							"description": "Aspect ratio in W:H format"
+						},
+						{
+							"key": "background_color",
+							"value": "#FFFFFF",
+							"type": "text",
+							"description": "Background color for padding (hex or named color)"
 						},
 						{
 							"key": "cookies_file",
@@ -321,7 +341,7 @@
 						"crop-zoom"
 					]
 				},
-				"description": "Crop video to center square and keep original cropped resolution."
+				"description": "Crop video to 16:9 aspect ratio and pad to 9:16 (1080x1920) output."
 			},
 			"response": []
 		},
@@ -336,7 +356,8 @@
 						{
 							"key": "video",
 							"type": "file",
-							"src": []
+							"src": [],
+							"description": "Video file to re-encode"
 						},
 						{
 							"key": "video_url",
@@ -348,19 +369,19 @@
 							"key": "codec",
 							"value": "libx264",
 							"type": "text",
-							"description": "Video codec (e.g., libx264, libx265)"
+							"description": "Video codec (default: libx264)"
 						},
 						{
 							"key": "bitrate",
 							"value": "5000k",
 							"type": "text",
-							"description": "Target bitrate in kbps format (e.g., 5000k)"
+							"description": "Target bitrate in kbps format (e.g., 5000k). Optional"
 						},
 						{
 							"key": "fps",
 							"value": "30",
 							"type": "text",
-							"description": "Target FPS (optional)"
+							"description": "Target FPS. Optional, uses original if not specified"
 						},
 						{
 							"key": "cookies_file",
@@ -397,12 +418,20 @@
 						{
 							"key": "video",
 							"type": "file",
-							"src": []
+							"src": [],
+							"description": "Video file (any field name accepted)"
 						},
 						{
 							"key": "audio",
 							"type": "file",
-							"src": []
+							"src": [],
+							"description": "Audio file (any field name accepted)"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for authentication"
 						}
 					]
 				},
@@ -467,6 +496,50 @@
 			"response": []
 		},
 		{
+			"name": "Merge Audio and Video (Mixed - Video File + Audio URL)",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "video",
+							"type": "file",
+							"src": [],
+							"description": "Video file upload"
+						},
+						{
+							"key": "audio_url",
+							"value": "https://www.youtube.com/watch?v=EXAMPLE",
+							"type": "text",
+							"description": "URL to download audio from"
+						},
+						{
+							"key": "cookies_file",
+							"type": "file",
+							"src": [],
+							"description": "Optional: Cookies file (Netscape format) for audio URL download"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/videos/merge-audio-video",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"videos",
+						"merge-audio-video"
+					]
+				},
+				"description": "Merge uploaded video file with audio downloaded from URL."
+			},
+			"response": []
+		},
+		{
 			"name": "Download Video from URL",
 			"request": {
 				"method": "POST",
@@ -484,19 +557,19 @@
 							"key": "quality",
 							"value": "best",
 							"type": "text",
-							"description": "Video quality: 'best', 'worst', '720p', '1080p', etc."
+							"description": "Video quality: 'best', 'worst', '720p', '1080p', etc. (default: best)"
 						},
 						{
 							"key": "format_type",
 							"value": "mp4",
 							"type": "text",
-							"description": "Output format: 'mp4', 'webm', etc."
+							"description": "Output format: 'mp4', 'webm', etc. (default: mp4)"
 						},
 						{
 							"key": "audio_only",
 							"value": "false",
 							"type": "text",
-							"description": "If 'true', download audio only as MP3"
+							"description": "If 'true', download audio only as MP3 (default: false)"
 						},
 						{
 							"key": "output_filename",
@@ -583,7 +656,8 @@
 						{
 							"key": "video",
 							"type": "file",
-							"src": []
+							"src": [],
+							"description": "Video file to process"
 						},
 						{
 							"key": "video_url",
@@ -594,68 +668,98 @@
 						{
 							"key": "audio",
 							"type": "file",
-							"src": []
+							"src": [],
+							"description": "Optional: Audio file to merge with video"
+						},
+						{
+							"key": "remove_audio",
+							"value": "false",
+							"type": "text",
+							"description": "Boolean: Remove audio track from video (default: false)"
 						},
 						{
 							"key": "merge_audio",
 							"value": "true",
-							"type": "text"
+							"type": "text",
+							"description": "Boolean: Merge audio file with video (default: false)"
 						},
 						{
 							"key": "color_grading",
 							"value": "true",
-							"type": "text"
+							"type": "text",
+							"description": "Boolean: Apply color grading (default: false)"
 						},
 						{
 							"key": "color_preset",
 							"value": "cinematic",
 							"type": "text",
-							"description": "Options: cinematic, warm, cool, vintage, vivid, bw, natural, random"
+							"description": "Options: cinematic, warm, cool, vintage, vivid, bw, natural, random (default: cinematic)"
 						},
 						{
 							"key": "color_brightness",
 							"value": "0.0",
-							"type": "text"
+							"type": "text",
+							"description": "Range: -1.0 to 1.0 (default: 0.0)"
 						},
 						{
 							"key": "color_contrast",
 							"value": "1.0",
-							"type": "text"
+							"type": "text",
+							"description": "Range: 0.0 to 2.0 (default: 1.0)"
 						},
 						{
 							"key": "color_saturation",
 							"value": "1.0",
-							"type": "text"
+							"type": "text",
+							"description": "Range: 0.0 to 2.0 (default: 1.0)"
 						},
 						{
 							"key": "crop_zoom",
 							"value": "true",
-							"type": "text"
+							"type": "text",
+							"description": "Boolean: Crop to aspect ratio and pad to 9:16 (default: false)"
+						},
+						{
+							"key": "crop_aspect_ratio",
+							"value": "4:3",
+							"type": "text",
+							"description": "Aspect ratio in W:H format (e.g., 1:1, 16:9, 4:3, 21:9). Default: 1:1 if not provided"
+						},
+						{
+							"key": "crop_background_color",
+							"value": "yellow",
+							"type": "text",
+							"description": "Background color (hex like #000000 or named color: black, white, red, green, blue, yellow, cyan, magenta, gray). Default: random"
 						},
 						{
 							"key": "crop_output_size",
 							"value": "1080",
-							"type": "text"
+							"type": "text",
+							"description": "Not used (kept for backward compatibility; output is always 9:16 format 1080x1920)"
 						},
 						{
 							"key": "reencode",
 							"value": "true",
-							"type": "text"
+							"type": "text",
+							"description": "Boolean: Re-encode video (default: false)"
 						},
 						{
 							"key": "codec",
 							"value": "libx264",
-							"type": "text"
+							"type": "text",
+							"description": "Video codec (default: libx264)"
 						},
 						{
 							"key": "bitrate",
 							"value": "5000k",
-							"type": "text"
+							"type": "text",
+							"description": "Target bitrate in kbps format (e.g., 5000k). Optional"
 						},
 						{
 							"key": "fps",
 							"value": "30",
-							"type": "text"
+							"type": "text",
+							"description": "Target FPS. Optional"
 						},
 						{
 							"key": "cookies_file",
@@ -677,7 +781,7 @@
 						"process"
 					]
 				},
-				"description": "Apply all video processing operations in one request: merge audio, color grading, crop to square, and re-encode."
+				"description": "Apply all video processing operations in one request: merge audio, color grading, crop to aspect ratio and pad to 9:16, and re-encode. Processing order: 1) Merge audio, 2) Remove audio (if set), 3) Color grading, 4) Crop and pad, 5) Re-encode."
 			},
 			"response": []
 		},
@@ -692,7 +796,8 @@
 						{
 							"key": "video",
 							"type": "file",
-							"src": []
+							"src": [],
+							"description": "Video file to process"
 						},
 						{
 							"key": "video_url",
@@ -703,22 +808,32 @@
 						{
 							"key": "color_grading",
 							"value": "true",
-							"type": "text"
+							"type": "text",
+							"description": "Boolean: Apply color grading"
 						},
 						{
 							"key": "color_preset",
 							"value": "random",
-							"type": "text"
+							"type": "text",
+							"description": "Color grading preset"
 						},
 						{
 							"key": "crop_zoom",
 							"value": "true",
-							"type": "text"
+							"type": "text",
+							"description": "Boolean: Crop to aspect ratio and pad to 9:16"
 						},
 						{
-							"key": "crop_output_size",
-							"value": "1080",
-							"type": "text"
+							"key": "crop_aspect_ratio",
+							"value": "1:1",
+							"type": "text",
+							"description": "Aspect ratio in W:H format"
+						},
+						{
+							"key": "crop_background_color",
+							"value": "#FF0000",
+							"type": "text",
+							"description": "Background color (hex or named color)"
 						},
 						{
 							"key": "cookies_file",
@@ -740,7 +855,7 @@
 						"process"
 					]
 				},
-				"description": "Apply color grading and crop to square in one request."
+				"description": "Apply color grading and crop to aspect ratio with padding to 9:16 in one request."
 			},
 			"response": []
 		},
@@ -755,7 +870,8 @@
 						{
 							"key": "video",
 							"type": "file",
-							"src": []
+							"src": [],
+							"description": "Video file to process"
 						},
 						{
 							"key": "video_url",
@@ -766,22 +882,26 @@
 						{
 							"key": "audio",
 							"type": "file",
-							"src": []
+							"src": [],
+							"description": "Audio file to merge"
 						},
 						{
 							"key": "merge_audio",
 							"value": "true",
-							"type": "text"
+							"type": "text",
+							"description": "Boolean: Merge audio file with video"
 						},
 						{
 							"key": "color_grading",
 							"value": "true",
-							"type": "text"
+							"type": "text",
+							"description": "Boolean: Apply color grading"
 						},
 						{
 							"key": "color_preset",
 							"value": "warm",
-							"type": "text"
+							"type": "text",
+							"description": "Color grading preset"
 						},
 						{
 							"key": "cookies_file",
@@ -847,16 +967,37 @@
 						{
 							"key": "status",
 							"value": "completed",
-							"description": "Filter by status: pending, processing, completed, failed"
+							"description": "Filter by status: pending, processing, completed, failed (optional)"
 						},
 						{
 							"key": "limit",
 							"value": "100",
-							"description": "Maximum number of jobs to return (1-1000)"
+							"description": "Maximum number of jobs to return (1-1000, default: 100)"
 						}
 					]
 				},
-				"description": "List all jobs, optionally filtered by status."
+				"description": "List all jobs, optionally filtered by status. Returns jobs sorted by creation time (newest first)."
+			},
+			"response": []
+		},
+		{
+			"name": "Delete Job",
+			"request": {
+				"method": "DELETE",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/api/v1/jobs/{{job_id}}",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"v1",
+						"jobs",
+						"{{job_id}}"
+					]
+				},
+				"description": "Delete a job from the system. Note: This does not delete the output file, only the job record."
 			},
 			"response": []
 		},
@@ -878,7 +1019,7 @@
 						"download"
 					]
 				},
-				"description": "Download the processed video file. Only works for completed jobs with video output."
+				"description": "Download the processed video file. Only works for completed jobs with video output (remove_audio, color_grading, crop_zoom, reencode, merge_audio_video, comprehensive, ytdlp_download)."
 			},
 			"response": []
 		},
@@ -932,7 +1073,8 @@
 		{
 			"key": "base_url",
 			"value": "http://localhost:8000",
-			"type": "string"
+			"type": "string",
+			"description": "Base URL for the API (e.g., http://localhost:8000 for local, or your deployed URL)"
 		},
 		{
 			"key": "job_id",
@@ -942,5 +1084,3 @@
 		}
 	]
 }
-
-
