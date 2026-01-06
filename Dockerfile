@@ -6,6 +6,7 @@ WORKDIR /app
 
 # Install system dependencies required for video processing
 RUN apt-get update && apt-get install -y nodejs npm \
+    ffmpeg \
     libsm6 \
     libxext6 \
     libxrender-dev \
