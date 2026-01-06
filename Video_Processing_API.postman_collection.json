@@ -1,8 +1,8 @@
 {
 	"info": {
-		"_postman_id": "video-processing-api-collection",
-		"name": "Video Processing API",
-		"description": "Comprehensive video processing API with multiple endpoints for video manipulation",
+		"_postman_id": "video-processing-api-collection-v3",
+		"name": "Video Processing API - File Uploads Only",
+		"description": "Comprehensive video processing API with all endpoints. All endpoints require file uploads via multipart/form-data. URL downloads are no longer supported.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
 		"_exporter_id": "video-processing"
 	},
@@ -1024,49 +1024,232 @@
 			"response": []
 		},
 		{
-			"name": "Get Scene Detection Results",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/{{job_id}}/scenes",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"{{job_id}}",
-						"scenes"
-					]
+			"name": "Comprehensive Processing",
+			"item": [
+				{
+					"name": "Comprehensive - All Operations",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "video",
+									"type": "file",
+									"src": [],
+									"description": "REQUIRED: Upload video file"
+								},
+								{
+									"key": "audio",
+									"type": "file",
+									"src": [],
+									"description": "Optional: Upload audio file (required if merge_audio=true)"
+								},
+								{
+									"key": "remove_audio",
+									"value": "false",
+									"type": "text",
+									"description": "Optional: Remove audio track (boolean: 'true' or 'false'). Default: false"
+								},
+								{
+									"key": "merge_audio",
+									"value": "false",
+									"type": "text",
+									"description": "Optional: Merge audio file with video (boolean: 'true' or 'false'). Requires audio file upload. Default: false"
+								},
+								{
+									"key": "color_grading",
+									"value": "false",
+									"type": "text",
+									"description": "Optional: Apply color grading (boolean: 'true' or 'false'). Default: false"
+								},
+								{
+									"key": "color_preset",
+									"value": "cinematic",
+									"type": "text",
+									"description": "Optional: Color grading preset (if color_grading=true). Options: cinematic, warm, cool, vintage, vivid, bw, natural, random. Default: 'cinematic'"
+								},
+								{
+									"key": "color_brightness",
+									"value": "0.0",
+									"type": "text",
+									"description": "Optional: Brightness adjustment -1.0 to 1.0 (if color_grading=true). Default: 0.0"
+								},
+								{
+									"key": "color_contrast",
+									"value": "1.0",
+									"type": "text",
+									"description": "Optional: Contrast adjustment 0.0 to 2.0 (if color_grading=true). Default: 1.0"
+								},
+								{
+									"key": "color_saturation",
+									"value": "1.0",
+									"type": "text",
+									"description": "Optional: Saturation adjustment 0.0 to 2.0 (if color_grading=true). Default: 1.0"
+								},
+								{
+									"key": "crop_zoom",
+									"value": "false",
+									"type": "text",
+									"description": "Optional: Crop to aspect ratio and pad to 9:16 (boolean: 'true' or 'false'). Default: false"
+								},
+								{
+									"key": "crop_aspect_ratio",
+									"value": "1:1",
+									"type": "text",
+									"description": "Optional: Crop aspect ratio in format 'W:H' (if crop_zoom=true). Default: '1:1'"
+								},
+								{
+									"key": "crop_background_color",
+									"value": "",
+									"type": "text",
+									"description": "Optional: Background color for padding (if crop_zoom=true). Hex or named color. Default: Random"
+								},
+								{
+									"key": "crop_output_size",
+									"value": "1080",
+									"type": "text",
+									"description": "Optional: Not used (kept for backward compatibility). Output is always 9:16 (1080x1920)"
+								},
+								{
+									"key": "reencode",
+									"value": "false",
+									"type": "text",
+									"description": "Optional: Re-encode video (boolean: 'true' or 'false'). Default: false"
+								},
+								{
+									"key": "codec",
+									"value": "libx264",
+									"type": "text",
+									"description": "Optional: Video codec (if reencode=true). Default: 'libx264'"
+								},
+								{
+									"key": "bitrate",
+									"value": "",
+									"type": "text",
+									"description": "Optional: Target bitrate in kbps format, e.g., '5000k' (if reencode=true)"
+								},
+								{
+									"key": "fps",
+									"value": "",
+									"type": "text",
+									"description": "Optional: Target FPS (if reencode=true)"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/process",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "process"]
+						},
+						"description": "Apply multiple video processing operations in one request. Operations are applied in sequence: 1) Merge audio (if merge_audio=true), 2) Remove audio (if remove_audio=true, overrides merge_audio), 3) Color grading (if color_grading=true), 4) Crop and zoom (if crop_zoom=true), 5) Re-encode (if reencode=true)."
+					},
+					"response": []
 				},
-				"description": "Get scene detection results as JSON. Only works for completed scene detection jobs."
-			},
-			"response": []
+				{
+					"name": "Comprehensive - Color Grade + Crop",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "video",
+									"type": "file",
+									"src": [],
+									"description": "REQUIRED: Upload video file"
+								},
+								{
+									"key": "color_grading",
+									"value": "true",
+									"type": "text",
+									"description": "REQUIRED: Set to 'true' to enable color grading"
+								},
+								{
+									"key": "color_preset",
+									"value": "random",
+									"type": "text",
+									"description": "Optional: Color preset. Default: 'cinematic'"
+								},
+								{
+									"key": "crop_zoom",
+									"value": "true",
+									"type": "text",
+									"description": "REQUIRED: Set to 'true' to enable crop and zoom"
+								},
+								{
+									"key": "crop_aspect_ratio",
+									"value": "16:9",
+									"type": "text",
+									"description": "Optional: Crop aspect ratio. Default: '1:1'"
+								},
+								{
+									"key": "crop_background_color",
+									"value": "#000000",
+									"type": "text",
+									"description": "Optional: Background color. Default: Random"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/process",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "process"]
+						},
+						"description": "Example: Apply color grading and crop to square in one request."
+					},
+					"response": []
+				}
+			]
 		},
 		{
-			"name": "Download Scene Data (JSON)",
-			"request": {
-				"method": "GET",
-				"header": [],
-				"url": {
-					"raw": "{{base_url}}/api/v1/videos/{{job_id}}/scenes/download",
-					"host": [
-						"{{base_url}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"videos",
-						"{{job_id}}",
-						"scenes",
-						"download"
-					]
+			"name": "Downloads & Results",
+			"item": [
+				{
+					"name": "Download Processed Video",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/{{job_id}}/download",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "{{job_id}}", "download"]
+						},
+						"description": "Download the processed video file. Only works for completed jobs with video output."
+					},
+					"response": []
 				},
-				"description": "Download scene detection results as a JSON file."
-			},
-			"response": []
+				{
+					"name": "Get Scene Detection Results",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/{{job_id}}/scenes",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "{{job_id}}", "scenes"]
+						},
+						"description": "Get scene detection results as JSON. Only works for completed scene detection jobs. Returns scene information including timestamps."
+					},
+					"response": []
+				},
+				{
+					"name": "Download Scene Data (JSON)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/videos/{{job_id}}/scenes/download",
+							"host": ["{{base_url}}"],
+							"path": ["api", "v1", "videos", "{{job_id}}", "scenes", "download"]
+						},
+						"description": "Download scene detection results as a JSON file."
+					},
+					"response": []
+				}
+			]
 		}
 	],
 	"variable": [
@@ -1075,12 +1258,14 @@
 			"value": "http://localhost:8000",
 			"type": "string",
 			"description": "Base URL for the API (e.g., http://localhost:8000 for local, or your deployed URL)"
+
 		},
 		{
 			"key": "job_id",
 			"value": "",
 			"type": "string",
-			"description": "Set this after getting a job_id from an upload endpoint response"
+			"description": "Set this after getting a job_id from an upload endpoint response. Used in status checks and downloads."
 		}
 	]
 }
+

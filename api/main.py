@@ -35,16 +35,6 @@ async def lifespan(app: FastAPI):
     print("Service starting...")
     print("=" * 80)
     
-    # Verify Node.js is available (for yt-dlp)
-    import shutil
-    node_path = shutil.which("node")
-    if node_path:
-        print(f"✓ Node.js found: {node_path}")
-    else:
-        print("⚠ Node.js not found (may affect YouTube downloads)")
-    
-    print("=" * 80)
-    
     # Ensure temp directories exist - organized by use case
     temp_dir = project_root / "temp_videos"
     temp_dir.mkdir(exist_ok=True)
@@ -74,9 +64,6 @@ async def lifespan(app: FastAPI):
     
     comprehensive_dir = temp_dir / "output" / "comprehensive"
     comprehensive_dir.mkdir(parents=True, exist_ok=True)
-    
-    ytdlp_dir = temp_dir / "output" / "ytdlp_downloads"
-    ytdlp_dir.mkdir(parents=True, exist_ok=True)
     
     yield
     
