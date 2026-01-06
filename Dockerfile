@@ -59,6 +59,7 @@ EXPOSE 8000
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PATH="/usr/bin:/usr/local/bin:/bin:${PATH}"
+ENV IMAGEIO_FFMPEG_EXE="/usr/bin/ffmpeg"
 
 # Health check (using curl instead of requests to avoid extra dependency)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \

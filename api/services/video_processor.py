@@ -4,6 +4,8 @@ Video processing service for audio removal and other video operations.
 
 import os
 import sys
+import shutil
+import traceback
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple
 import numpy as np
@@ -13,14 +15,88 @@ import random
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+# Configure MoviePy to use system FFMPEG explicitly
+# Find FFMPEG binary and set environment variable for MoviePy
+ffmpeg_path = os.environ.get("IMAGEIO_FFMPEG_EXE") or shutil.which("ffmpeg")
+if ffmpeg_path:
+    os.environ["IMAGEIO_FFMPEG_EXE"] = ffmpeg_path
+    print(f"MoviePy: Using FFMPEG at {ffmpeg_path}")
+    
+    # Also verify FFMPEG is executable
+    if not os.access(ffmpeg_path, os.X_OK):
+        print(f"WARNING: FFMPEG at {ffmpeg_path} is not executable")
+    else:
+        # Test FFMPEG can be called
+        try:
+            import subprocess
+            result = subprocess.run(
+                [ffmpeg_path, "-version"],
+                capture_output=True,
+                timeout=5,
+                text=True
+            )
+            if result.returncode == 0:
+                print(f"MoviePy: FFMPEG verified working - {result.stdout.split(chr(10))[0]}")
+            else:
+                print(f"WARNING: FFMPEG version check failed with return code {result.returncode}")
+        except Exception as e:
+            print(f"WARNING: Could not verify FFMPEG: {e}")
+else:
+    print("WARNING: FFMPEG not found in PATH - MoviePy may fail")
+
 from moviepy import VideoFileClip, AudioFileClip, CompositeAudioClip, ImageClip, CompositeVideoClip
 from moviepy import vfx
 from scenedetect import VideoManager, SceneManager
 from scenedetect.detectors import ContentDetector
 
+# Additional configuration: Ensure imageio-ffmpeg uses the system FFMPEG
+try:
+    import imageio_ffmpeg
+    # Explicitly set the FFMPEG binary path for imageio
+    if ffmpeg_path:
+        # This ensures MoviePy's audio readers use the correct FFMPEG
+        imageio_ffmpeg.get_ffmpeg_exe = lambda: ffmpeg_path
+        print(f"MoviePy: Configured imageio-ffmpeg to use {ffmpeg_path}")
+except ImportError:
+    print("WARNING: imageio-ffmpeg not available, using default FFMPEG detection")
+except Exception as e:
+    print(f"WARNING: Could not configure imageio-ffmpeg: {e}")
+
 
 class VideoProcessor:
     """Service for processing videos."""
+    
+    @staticmethod
+    def _handle_write_videofile_error(e: Exception, operation: str = "video encoding") -> Exception:
+        """
+        Handle errors from write_videofile calls with detailed error messages.
+        
+        Args:
+            e: The exception that was raised
+            operation: Description of the operation being performed
+            
+        Returns:
+            A new Exception with detailed error information
+        """
+        error_type = type(e).__name__
+        error_msg = str(e)
+        tb = traceback.format_exc()
+        
+        # Check for specific error types
+        if isinstance(e, (OSError, IOError)):
+            if "Broken pipe" in error_msg or "errno 32" in error_msg.lower():
+                return Exception(
+                    f"FFmpeg process was terminated (broken pipe) during {operation}. "
+                    f"This may be due to resource constraints (memory/CPU/disk). "
+                    f"Original error: {error_msg}"
+                )
+        
+        # Generic error handler for all other exceptions
+        return Exception(
+            f"{operation} failed ({error_type}): {error_msg}. "
+            f"This may be due to FFMPEG subprocess issues, resource constraints, "
+            f"or MoviePy compatibility issues. Full traceback: {tb}"
+        )
     
     def remove_audio(self, input_path: str, output_path: str):
         """
@@ -58,14 +134,8 @@ class VideoProcessor:
                     ffmpeg_params=["-preset", "medium", "-threads", "2"],  # Encoding speed/quality balance, limit CPU
                     logger=None,  # Suppress verbose logging
                 )
-            except (OSError, IOError) as e:
-                if "Broken pipe" in str(e) or "errno 32" in str(e).lower():
-                    raise Exception(
-                        f"FFmpeg process was terminated (broken pipe). "
-                        f"This may be due to resource constraints (memory/CPU/disk). "
-                        f"Original error: {str(e)}"
-                    )
-                raise
+            except Exception as e:
+                raise self._handle_write_videofile_error(e, "audio removal")
             
         finally:
             # Clean up
@@ -320,14 +390,8 @@ class VideoProcessor:
                     ffmpeg_params=["-preset", "medium", "-threads", "2"],  # Encoding speed/quality balance, limit CPU
                     logger=None,  # Suppress verbose logging
                 )
-            except (OSError, IOError) as e:
-                if "Broken pipe" in str(e) or "errno 32" in str(e).lower():
-                    raise Exception(
-                        f"FFmpeg process was terminated (broken pipe). "
-                        f"This may be due to resource constraints (memory/CPU/disk). "
-                        f"Original error: {str(e)}"
-                    )
-                raise
+            except Exception as e:
+                raise self._handle_write_videofile_error(e, "color grading")
             
         finally:
             # Clean up
@@ -397,14 +461,8 @@ class VideoProcessor:
                     ffmpeg_params=["-preset", "medium", "-threads", "2"],  # Encoding speed/quality balance, limit CPU
                     logger=None,  # Suppress verbose logging
                 )
-            except (OSError, IOError) as e:
-                if "Broken pipe" in str(e) or "errno 32" in str(e).lower():
-                    raise Exception(
-                        f"FFmpeg process was terminated (broken pipe). "
-                        f"This may be due to resource constraints (memory/CPU/disk). "
-                        f"Original error: {str(e)}"
-                    )
-                raise
+            except Exception as e:
+                raise self._handle_write_videofile_error(e, "crop and zoom")
             
         finally:
             # Clean up
@@ -576,14 +634,8 @@ class VideoProcessor:
                     logger=None,  # Suppress verbose logging
                     audio_codec="aac" if video.audio is not None else None,
                 )
-            except (OSError, IOError) as e:
-                if "Broken pipe" in str(e) or "errno 32" in str(e).lower():
-                    raise Exception(
-                        f"FFmpeg process was terminated (broken pipe). "
-                        f"This may be due to resource constraints (memory/CPU/disk). "
-                        f"Original error: {str(e)}"
-                    )
-                raise
+            except Exception as e:
+                raise self._handle_write_videofile_error(e, "crop to aspect ratio and pad to 9:16")
             
         finally:
             # Clean up
@@ -659,14 +711,8 @@ class VideoProcessor:
                     output_path,
                     **write_kwargs
                 )
-            except (OSError, IOError) as e:
-                if "Broken pipe" in str(e) or "errno 32" in str(e).lower():
-                    raise Exception(
-                        f"FFmpeg process was terminated (broken pipe). "
-                        f"This may be due to resource constraints (memory/CPU/disk). "
-                        f"Original error: {str(e)}"
-                    )
-                raise
+            except Exception as e:
+                raise self._handle_write_videofile_error(e, "video re-encoding")
             
         finally:
             # Clean up
@@ -743,14 +789,8 @@ class VideoProcessor:
                     ffmpeg_params=["-preset", "medium", "-threads", "2"],  # Encoding speed/quality balance, limit CPU
                     logger=None,  # Suppress verbose logging
                 )
-            except (OSError, IOError) as e:
-                if "Broken pipe" in str(e) or "errno 32" in str(e).lower():
-                    raise Exception(
-                        f"FFmpeg process was terminated (broken pipe). "
-                        f"This may be due to resource constraints (memory/CPU/disk). "
-                        f"Original error: {str(e)}"
-                    )
-                raise
+            except Exception as e:
+                raise self._handle_write_videofile_error(e, "merge audio and video")
             
         finally:
             # Clean up
@@ -783,6 +823,8 @@ class VideoProcessor:
         """
         Apply multiple video processing operations in sequence.
         
+        Version: 2026-01-06-04:30 - Uses FFMPEG subprocess to preserve original audio.
+        
         Processing order:
         1. Load video (and audio if provided)
         2. Merge audio with video (if merge_audio is True)
@@ -790,6 +832,7 @@ class VideoProcessor:
         4. Color grading (if color_grading is True)
         5. Crop and zoom to specified aspect ratio, then pad to 9:16 with background color (if crop_zoom is True)
         6. Re-encode (if reencode is True, or always at the end to finalize)
+        7. Merge original audio using FFMPEG subprocess (if audio should be preserved)
         
         Args:
             video_path: Path to input video file
@@ -816,6 +859,11 @@ class VideoProcessor:
             ValueError: If invalid parameters provided
             Exception: If video processing fails
         """
+        # DEBUG: Version identifier for deployment verification
+        print("=" * 80)
+        print("VIDEO PROCESSOR VERSION: 2026-01-06-04:30 - Audio preservation via FFMPEG")
+        print("=" * 80)
+        
         # Validate input file exists
         if not Path(video_path).exists():
             raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -831,8 +879,54 @@ class VideoProcessor:
         output_dir = Path(output_path).parent
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Load video
-        video = VideoFileClip(video_path)
+        # Load video - load without audio first to avoid audio subprocess issues
+        # This prevents the 'NoneType' object has no attribute 'stdout' error
+        # when MoviePy's audio reader can't start FFMPEG subprocess
+        try:
+            # Load video without audio to avoid subprocess issues
+            video = VideoFileClip(video_path, audio=False)
+            video_has_audio = False
+            original_audio = None
+            
+            # Only try to preserve audio if we're not removing it and not merging new audio
+            if not remove_audio and not merge_audio:
+                # Try to load audio separately, but don't fail if it doesn't work
+                # This is a workaround for MoviePy audio reader subprocess issues
+                try:
+                    # Use ffprobe to check if video has audio track first (faster than loading)
+                    import subprocess
+                    probe_result = subprocess.run(
+                        [shutil.which("ffprobe") or "ffprobe", "-v", "error", "-select_streams", "a:0",
+                         "-show_entries", "stream=codec_type", "-of", "default=noprint_wrappers=1:nokey=1",
+                         video_path],
+                        capture_output=True,
+                        timeout=5,
+                        text=True
+                    )
+                    has_audio_track = probe_result.returncode == 0 and "audio" in probe_result.stdout.lower()
+                    
+                    if has_audio_track:
+                        # Video has audio track, but we'll skip loading it to avoid subprocess issues
+                        # The audio will be preserved during encoding if possible
+                        video_has_audio = True
+                        print(f"Note: Video has audio track, but loading it separately to avoid subprocess issues")
+                except Exception as e:
+                    # If checking fails, assume no audio or proceed without it
+                    print(f"Could not check audio track: {e}")
+                    video_has_audio = False
+        except Exception as e:
+            # Fallback: try loading normally if loading without audio fails
+            print(f"Warning: Could not load video without audio, trying normal load: {e}")
+            try:
+                video = VideoFileClip(video_path, audio=False)  # Still try without audio
+                video_has_audio = False
+                original_audio = None
+            except:
+                # Last resort: load with audio (may fail with subprocess error)
+                video = VideoFileClip(video_path)
+                video_has_audio = video.audio is not None
+                original_audio = video.audio if video_has_audio else None
+        
         audio_clip = None
         
         try:
@@ -869,8 +963,9 @@ class VideoProcessor:
                 video = video.with_audio(audio_clip)
             
             elif remove_audio:
-                # Remove audio track
-                video = video.without_audio()
+                # Remove audio track (already done by loading with audio=False)
+                if video_has_audio:
+                    video = video.without_audio()
             
             # Step 2: Apply color grading
             if color_grading:
@@ -933,6 +1028,10 @@ class VideoProcessor:
                     return frame_processed
                 
                 video = video.with_updated_frame_function(apply_grading_to_frame)
+                
+                # Ensure color-graded video has no audio (should already be None, but double-check)
+                if hasattr(video, 'audio') and video.audio is not None:
+                    video = video.without_audio()
             
             # Step 3: Crop and zoom to specified aspect ratio, then pad to 9:16 with background color
             if crop_zoom:
@@ -999,8 +1098,10 @@ class VideoProcessor:
                 else:
                     bg_color_rgb = parse_color(crop_background_color)
                 
-                # Preserve audio before cropping
-                original_audio = video.audio
+                # Don't preserve audio - we load without audio to avoid subprocess issues
+                # Explicitly ensure video has no audio before processing
+                if hasattr(video, 'audio') and video.audio is not None:
+                    video = video.without_audio()
                 
                 # Get video dimensions
                 w, h = video.size
@@ -1026,6 +1127,10 @@ class VideoProcessor:
                     vfx.Crop(x1=crop_x, y1=crop_y, x2=crop_x + crop_w, y2=crop_y + crop_h)
                 ])
                 
+                # Ensure cropped video has no audio
+                if hasattr(cropped_video, 'audio') and cropped_video.audio is not None:
+                    cropped_video = cropped_video.without_audio()
+                
                 # Calculate 9:16 output dimensions (1080x1920)
                 output_width = 1080
                 output_height = 1920
@@ -1043,19 +1148,32 @@ class VideoProcessor:
                     vfx.Resize((scaled_w, scaled_h))
                 ])
                 
+                # Ensure scaled video has no audio
+                if hasattr(scaled_video, 'audio') and scaled_video.audio is not None:
+                    scaled_video = scaled_video.without_audio()
+                
                 # Create background (9:16 frame with background color)
                 bg_array = np.full((output_height, output_width, 3), bg_color_rgb, dtype=np.uint8)
                 background = ImageClip(bg_array).with_duration(video.duration)
                 
                 # Composite: place scaled video on background (centered)
+                # Ensure no audio is passed to CompositeVideoClip
+                video_no_audio_composite = scaled_video.with_position("center")
+                if hasattr(video_no_audio_composite, 'audio') and video_no_audio_composite.audio is not None:
+                    video_no_audio_composite = video_no_audio_composite.without_audio()
+                
                 video = CompositeVideoClip(
-                    [background, scaled_video.with_position("center")],
+                    [background, video_no_audio_composite],
                     size=(output_width, output_height)
                 )
                 
-                # Preserve audio if present
-                if original_audio is not None:
-                    video = video.with_audio(original_audio)
+                # Double-check final composite has no audio
+                if hasattr(video, 'audio') and video.audio is not None:
+                    video = video.without_audio()
+                
+                # Skip audio preservation here - we'll handle it during encoding
+                # to avoid MoviePy audio reader subprocess issues
+                # Audio will be preserved via FFMPEG during write_videofile if video_has_audio is True
                 
                 # Clean up intermediate clips
                 cropped_video.close()
@@ -1065,6 +1183,9 @@ class VideoProcessor:
             # Step 4: Apply FPS change if reencoding with FPS
             if reencode and fps and fps > 0:
                 video = video.with_fps(fps)
+                # Ensure FPS change didn't re-attach audio
+                if hasattr(video, 'audio') and video.audio is not None:
+                    video = video.without_audio()
             
             # Prepare write_videofile arguments
             write_kwargs = {
@@ -1077,9 +1198,44 @@ class VideoProcessor:
             if reencode and bitrate:
                 write_kwargs["bitrate"] = bitrate
             
-            # Add audio codec only if video has audio
-            if video.audio is not None:
+            # Handle audio encoding - CRITICAL: Prevent MoviePy audio reader subprocess issues
+            # Since MoviePy's audio reader subprocess fails (returns None), we must ensure
+            # we don't let MoviePy try to read audio from VideoFileClip objects.
+            # We'll handle audio preservation using FFMPEG subprocess after writing the video.
+            
+            needs_audio_merge = False  # Track if we need to merge audio using FFMPEG
+            
+            if audio_clip is not None:
+                # New audio is being merged from a separate file - this should work
+                # since AudioFileClip loads differently than VideoFileClip audio
                 write_kwargs["audio_codec"] = "aac"
+            elif remove_audio:
+                # User explicitly wants audio removed
+                if hasattr(video, 'audio') and video.audio is not None:
+                    video = video.without_audio()
+                    print("Removed audio from video (remove_audio=True)")
+            elif video_has_audio and not remove_audio:
+                # Original video has audio and user wants to preserve it
+                # Remove audio from MoviePy object to prevent subprocess issues
+                # We'll merge it back using FFMPEG subprocess after writing
+                if hasattr(video, 'audio') and video.audio is not None:
+                    video = video.without_audio()
+                    print("Removed audio from MoviePy object to avoid subprocess issues. Will preserve via FFMPEG.")
+                
+                # Mark that we need to merge audio after writing
+                needs_audio_merge = True
+                # Don't set audio_codec - video will be written without audio, then merged
+            else:
+                # No audio to preserve
+                if hasattr(video, 'audio') and video.audio is not None:
+                    video = video.without_audio()
+                    print("Removed audio from video (no audio to preserve)")
+            
+            # Final safety check: verify video has no audio before write_videofile
+            # (unless we're merging new audio from a separate file)
+            if hasattr(video, 'audio') and video.audio is not None and audio_clip is None:
+                raise Exception("CRITICAL: Video object still has audio attached before write_videofile. "
+                              "This will cause the 'NoneType' stdout error. Audio must be removed.")
             
             # Write output video with error handling for broken pipe
             try:
@@ -1087,15 +1243,68 @@ class VideoProcessor:
                     output_path,
                     **write_kwargs
                 )
-            except (OSError, IOError) as e:
-                if "Broken pipe" in str(e) or "errno 32" in str(e).lower():
-                    raise Exception(
-                        f"FFmpeg process was terminated (broken pipe). "
-                        f"This may be due to resource constraints (memory/CPU/disk). "
-                        f"Try reducing video resolution, bitrate, or processing fewer operations at once. "
-                        f"Original error: {str(e)}"
+            except Exception as e:
+                raise self._handle_write_videofile_error(e, "comprehensive video processing")
+            
+            # If we need to merge audio, do it now using FFMPEG directly (bypasses MoviePy)
+            # This preserves original audio without triggering MoviePy's broken audio reader
+            if needs_audio_merge:
+                try:
+                    import subprocess
+                    import tempfile
+                    import shutil
+                    
+                    print("Merging audio from original video using FFMPEG subprocess...")
+                    
+                    # Create temporary file for video with audio
+                    temp_output = output_path.replace('.mp4', '_with_audio_temp.mp4')
+                    
+                    # Use FFMPEG to merge audio from original video file
+                    # This bypasses MoviePy's broken audio reader subprocess
+                    ffmpeg_cmd = [
+                        "ffmpeg",
+                        "-i", output_path,      # Video file (no audio) - processed video
+                        "-i", video_path,       # Original video (has audio)
+                        "-c:v", "copy",         # Copy video stream (no re-encoding)
+                        "-c:a", "aac",          # Encode audio to AAC for compatibility
+                        "-map", "0:v:0",        # Use video from first input (processed)
+                        "-map", "1:a:0?",       # Use audio from second input (original, optional - won't fail if missing)
+                        "-shortest",            # End when shortest stream ends
+                        "-y",                   # Overwrite output
+                        temp_output
+                    ]
+                    
+                    result = subprocess.run(
+                        ffmpeg_cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=300  # 5 minute timeout
                     )
-                raise
+                    
+                    if result.returncode == 0:
+                        # Replace output with merged version
+                        shutil.move(temp_output, output_path)
+                        print("Successfully merged audio using FFMPEG subprocess")
+                    else:
+                        print(f"Warning: Failed to merge audio using FFMPEG: {result.stderr}")
+                        # Try to clean up temp file
+                        try:
+                            if os.path.exists(temp_output):
+                                os.remove(temp_output)
+                        except:
+                            pass
+                        # Keep video without audio rather than failing completely
+                        print("Video saved without audio due to audio merge failure")
+                except subprocess.TimeoutExpired:
+                    print("Warning: Audio merge timed out. Video saved without audio.")
+                    try:
+                        if os.path.exists(temp_output):
+                            os.remove(temp_output)
+                    except:
+                        pass
+                except Exception as e:
+                    print(f"Warning: Could not merge audio using FFMPEG: {e}. Video saved without audio.")
+                    # Don't raise - video processing succeeded, just audio merge failed
             
         finally:
             # Clean up

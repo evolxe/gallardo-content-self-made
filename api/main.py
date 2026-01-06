@@ -113,6 +113,7 @@ async def health():
     health_status = {
         "status": "healthy",
         "service": "video-generation",
+        "code_version": "2026-01-06-04:30-audio-preservation-fix",
         "dependencies": {}
     }
     
