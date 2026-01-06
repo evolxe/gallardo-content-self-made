@@ -1029,8 +1029,10 @@ class VideoProcessor:
                 
                 video = video.with_updated_frame_function(apply_grading_to_frame)
                 
-                # Ensure color-graded video has no audio (should already be None, but double-check)
-                if hasattr(video, 'audio') and video.audio is not None:
+                # Preserve audio if it was merged - don't remove it here
+                # Audio will be handled during final encoding
+                # Only remove audio if we didn't merge audio from a separate file
+                if audio_clip is None and hasattr(video, 'audio') and video.audio is not None:
                     video = video.without_audio()
             
             # Step 3: Crop and zoom to specified aspect ratio, then pad to 9:16 with background color
@@ -1098,9 +1100,9 @@ class VideoProcessor:
                 else:
                     bg_color_rgb = parse_color(crop_background_color)
                 
-                # Don't preserve audio - we load without audio to avoid subprocess issues
-                # Explicitly ensure video has no audio before processing
-                if hasattr(video, 'audio') and video.audio is not None:
+                # Preserve audio if it was merged from a separate file
+                # Only remove audio if we didn't merge audio (to avoid subprocess issues)
+                if audio_clip is None and hasattr(video, 'audio') and video.audio is not None:
                     video = video.without_audio()
                 
                 # Get video dimensions
@@ -1127,8 +1129,8 @@ class VideoProcessor:
                     vfx.Crop(x1=crop_x, y1=crop_y, x2=crop_x + crop_w, y2=crop_y + crop_h)
                 ])
                 
-                # Ensure cropped video has no audio
-                if hasattr(cropped_video, 'audio') and cropped_video.audio is not None:
+                # Preserve audio if it was merged - don't remove it during crop
+                if audio_clip is None and hasattr(cropped_video, 'audio') and cropped_video.audio is not None:
                     cropped_video = cropped_video.without_audio()
                 
                 # Calculate 9:16 output dimensions (1080x1920)
@@ -1148,8 +1150,8 @@ class VideoProcessor:
                     vfx.Resize((scaled_w, scaled_h))
                 ])
                 
-                # Ensure scaled video has no audio
-                if hasattr(scaled_video, 'audio') and scaled_video.audio is not None:
+                # Preserve audio if it was merged - don't remove it during scale
+                if audio_clip is None and hasattr(scaled_video, 'audio') and scaled_video.audio is not None:
                     scaled_video = scaled_video.without_audio()
                 
                 # Create background (9:16 frame with background color)
@@ -1157,18 +1159,19 @@ class VideoProcessor:
                 background = ImageClip(bg_array).with_duration(video.duration)
                 
                 # Composite: place scaled video on background (centered)
-                # Ensure no audio is passed to CompositeVideoClip
-                video_no_audio_composite = scaled_video.with_position("center")
-                if hasattr(video_no_audio_composite, 'audio') and video_no_audio_composite.audio is not None:
-                    video_no_audio_composite = video_no_audio_composite.without_audio()
+                # Preserve audio if it was merged from a separate file
+                video_composite = scaled_video.with_position("center")
+                if audio_clip is None and hasattr(video_composite, 'audio') and video_composite.audio is not None:
+                    video_composite = video_composite.without_audio()
                 
                 video = CompositeVideoClip(
-                    [background, video_no_audio_composite],
+                    [background, video_composite],
                     size=(output_width, output_height)
                 )
                 
-                # Double-check final composite has no audio
-                if hasattr(video, 'audio') and video.audio is not None:
+                # Preserve audio in composite if it was merged
+                # CompositeVideoClip might lose audio, so we'll handle it during encoding
+                if audio_clip is None and hasattr(video, 'audio') and video.audio is not None:
                     video = video.without_audio()
                 
                 # Skip audio preservation here - we'll handle it during encoding
@@ -1183,8 +1186,8 @@ class VideoProcessor:
             # Step 4: Apply FPS change if reencoding with FPS
             if reencode and fps and fps > 0:
                 video = video.with_fps(fps)
-                # Ensure FPS change didn't re-attach audio
-                if hasattr(video, 'audio') and video.audio is not None:
+                # Preserve audio if it was merged - don't remove it
+                if audio_clip is None and hasattr(video, 'audio') and video.audio is not None:
                     video = video.without_audio()
             
             # Prepare write_videofile arguments
@@ -1204,11 +1207,28 @@ class VideoProcessor:
             # We'll handle audio preservation using FFMPEG subprocess after writing the video.
             
             needs_audio_merge = False  # Track if we need to merge audio using FFMPEG
+            audio_file_to_merge = None  # Track the audio file path if we need to merge it via FFMPEG
             
             if audio_clip is not None:
-                # New audio is being merged from a separate file - this should work
-                # since AudioFileClip loads differently than VideoFileClip audio
-                write_kwargs["audio_codec"] = "aac"
+                # New audio is being merged from a separate file
+                # MoviePy transformations (especially CompositeVideoClip) often lose audio attachments
+                # So we'll always merge via FFMPEG for reliability instead of relying on MoviePy's audio handling
+                if hasattr(video, 'audio') and video.audio is not None:
+                    try:
+                        # Check if audio is still valid by accessing duration
+                        _ = video.audio.duration
+                        # Audio seems valid, but CompositeVideoClip operations may have broken it
+                        # Remove it and merge via FFMPEG to be safe
+                        print("Audio attached, but removing it to merge via FFMPEG for reliability (CompositeVideoClip may break audio)")
+                        video = video.without_audio()
+                    except Exception as e:
+                        print(f"Audio attachment broken or lost during transformations ({e})")
+                        video = video.without_audio()
+                
+                # Always merge via FFMPEG for merged audio files
+                needs_audio_merge = True
+                audio_file_to_merge = audio_path  # Use the separate audio file path
+                print(f"Will merge audio file via FFMPEG: {audio_file_to_merge}")
             elif remove_audio:
                 # User explicitly wants audio removed
                 if hasattr(video, 'audio') and video.audio is not None:
@@ -1247,28 +1267,42 @@ class VideoProcessor:
                 raise self._handle_write_videofile_error(e, "comprehensive video processing")
             
             # If we need to merge audio, do it now using FFMPEG directly (bypasses MoviePy)
-            # This preserves original audio without triggering MoviePy's broken audio reader
+            # This preserves original audio or merges separate audio file without triggering MoviePy's broken audio reader
             if needs_audio_merge:
                 try:
                     import subprocess
                     import tempfile
                     import shutil
                     
-                    print("Merging audio from original video using FFMPEG subprocess...")
+                    # Determine audio source
+                    if audio_file_to_merge:
+                        # Merging audio from a separate audio file
+                        if not Path(audio_file_to_merge).exists():
+                            raise FileNotFoundError(f"Audio file not found for merging: {audio_file_to_merge}")
+                        audio_source = audio_file_to_merge
+                        print(f"Merging audio from separate audio file using FFMPEG subprocess: {audio_source}")
+                        audio_map = "1:a:0"  # Map audio from second input (the audio file)
+                    else:
+                        # Merging audio from original video
+                        if not Path(video_path).exists():
+                            raise FileNotFoundError(f"Original video file not found for audio extraction: {video_path}")
+                        audio_source = video_path
+                        print(f"Merging audio from original video using FFMPEG subprocess: {audio_source}")
+                        audio_map = "1:a:0?"  # Map audio from second input (original video, optional)
                     
                     # Create temporary file for video with audio
                     temp_output = output_path.replace('.mp4', '_with_audio_temp.mp4')
                     
-                    # Use FFMPEG to merge audio from original video file
+                    # Use FFMPEG to merge audio
                     # This bypasses MoviePy's broken audio reader subprocess
                     ffmpeg_cmd = [
                         "ffmpeg",
                         "-i", output_path,      # Video file (no audio) - processed video
-                        "-i", video_path,       # Original video (has audio)
+                        "-i", audio_source,     # Audio source (either original video or separate audio file)
                         "-c:v", "copy",         # Copy video stream (no re-encoding)
                         "-c:a", "aac",          # Encode audio to AAC for compatibility
                         "-map", "0:v:0",        # Use video from first input (processed)
-                        "-map", "1:a:0?",       # Use audio from second input (original, optional - won't fail if missing)
+                        "-map", audio_map,      # Use audio from second input
                         "-shortest",            # End when shortest stream ends
                         "-y",                   # Overwrite output
                         temp_output
